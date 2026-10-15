@@ -594,7 +594,8 @@ function viewSettings() {
           : '<p class="sub">Todavía no hay especies.</p>'
       }
       ${online() && species.some((s) => !s.wiki) ? '<button class="btn secondary block" style="margin-top: 10px" data-action="sync-now">Completar ahora</button>' : ''}
-    </div>`;
+    </div>
+    <p class="hint" style="text-align: center; margin-top: 18px">Plantas · build ${esc(__BUILD__)}</p>`;
 }
 
 /* ---------- router ---------- */
