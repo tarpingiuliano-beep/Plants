@@ -1,0 +1,8 @@
+{
+  "appId": "com.giuliano.plantas",
+  "appName": "Plantas",
+  "webDir": "dist",
+  "android": {
+    "backgroundColor": "#f4f1ea"
+  }
+}
