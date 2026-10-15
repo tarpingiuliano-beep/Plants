@@ -57,10 +57,22 @@ jobs:
       - name: Sincronizar Capacitor
         run: npx cap sync android
 
-      - name: Usar la misma firma en cada build (así el APK se actualiza sin desinstalar)
+      - name: Firmar siempre con la misma clave (así Android acepta las actualizaciones)
         run: |
-          mkdir -p ~/.android
-          cp signing/debug.keystore ~/.android/debug.keystore
+          cat >> android/app/build.gradle <<'EOF'
+
+          android {
+              signingConfigs {
+                  debug {
+                      storeFile file("$rootDir/../signing/debug.keystore")
+                      storePassword "android"
+                      keyAlias "androiddebugkey"
+                      keyPassword "android"
+                  }
+              }
+          }
+          EOF
+          tail -14 android/app/build.gradle
 
       - name: Compilar APK
         working-directory: android
@@ -70,6 +82,14 @@ jobs:
 
       - name: Preparar APK
         run: cp android/app/build/outputs/apk/debug/app-debug.apk plantas.apk
+
+      - name: Verificar que el APK lleva la firma esperada
+        run: |
+          EXPECTED=$(keytool -list -v -keystore signing/debug.keystore -storepass android -alias androiddebugkey | grep "SHA256:" | head -1 | awk '{print $2}')
+          ACTUAL=$(keytool -printcert -jarfile plantas.apk | grep "SHA256:" | head -1 | awk '{print $2}')
+          echo "Esperada: $EXPECTED"
+          echo "Del APK:  $ACTUAL"
+          [ -n "$EXPECTED" ] && [ "$EXPECTED" = "$ACTUAL" ] || { echo "La firma del APK no coincide"; exit 1; }
 
       - uses: actions/upload-artifact@v4
         with:
