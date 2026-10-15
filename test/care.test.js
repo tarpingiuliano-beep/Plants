@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { lookup, searchSpecies, advice, placementOf, PLACEMENTS } from '../src/species.js';
 import { adjustedDays, summarizeClimate, buildColdAlerts } from '../src/logic.js';
-import { parsePlantNet, identifyPlant } from '../src/net.js';
+import { parsePlantNet, identifyPlant, testKey } from '../src/net.js';
 
 test('lookup: especie exacta, género, familia y genérico', () => {
   assert.equal(lookup('Monstera deliciosa').source, 'especie');
@@ -123,8 +123,16 @@ test('PlantNet: manejo de errores HTTP', async () => {
   try {
     globalThis.fetch = mock(404);
     assert.deepEqual(await identifyPlant(photo, 'k'), []);
-    globalThis.fetch = mock(401);
-    await assert.rejects(identifyPlant(photo, 'k'), /clave/);
+    globalThis.fetch = mock(401, { statusCode: 401, message: 'Missing or invalid API key' });
+    await assert.rejects(identifyPlant(photo, 'k'), /401.*Missing or invalid API key/);
+    globalThis.fetch = mock(403, { message: 'Origin not allowed' });
+    await assert.rejects(identifyPlant(photo, 'k'), /403.*Origin not allowed/);
+    globalThis.fetch = mock(500);
+    await assert.rejects(identifyPlant(photo, 'k'), /error 500/);
+    globalThis.fetch = mock(401, { message: 'bad key' });
+    assert.deepEqual(await testKey('k'), { ok: false, status: 401, msg: 'bad key' });
+    globalThis.fetch = mock(200, []);
+    assert.equal((await testKey('k')).ok, true);
     globalThis.fetch = mock(429);
     await assert.rejects(identifyPlant(photo, 'k'), /límite/);
     globalThis.fetch = mock(200, { results: [{ score: 0.5, species: { scientificNameWithoutAuthor: 'Aloe vera' } }] });

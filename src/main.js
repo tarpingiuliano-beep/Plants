@@ -17,7 +17,7 @@ import {
   COLD_ALERT_FROM,
 } from './logic.js';
 import { PLACEMENTS, placementOf, lookup, searchSpecies, allNames, advice, lightLabel } from './species.js';
-import { fetchClimate, searchCity, identifyPlant, fetchWiki } from './net.js';
+import { fetchClimate, searchCity, identifyPlant, fetchWiki, testKey } from './net.js';
 import {
   isNative,
   permissionState,
@@ -33,6 +33,7 @@ let perm = 'unsupported';
 let draft = null; // borrador del formulario de planta
 let cityResults = [];
 let cityMsg = '';
+let keyMsg = '';
 
 const $app = document.getElementById('app');
 const $toast = document.getElementById('toast');
@@ -566,6 +567,8 @@ function viewSettings() {
       <b>🔎 Reconocimiento de plantas (PlantNet)</b>
       <label for="s-key" style="margin-top: 10px">Clave de la API</label>
       <input type="password" id="s-key" value="${esc(data.keys.plantnet)}" placeholder="Pegá tu clave" autocomplete="off" />
+      <button class="btn secondary block" style="margin-top: 10px" data-action="test-key">Probar clave</button>
+      ${keyMsg ? `<p class="status ${keyMsg.startsWith('✅') ? '' : 'warn'}" style="margin-top: 10px">${esc(keyMsg)}</p>` : ''}
       <p class="hint">Es gratis: creás una cuenta en my.plantnet.org y copiás la clave de “API”. Queda guardada solo en tu celular.</p>
     </div>
 
@@ -747,6 +750,28 @@ $app.addEventListener('click', async (e) => {
     syncDraft();
     draft.placement = id;
     return refreshCareZone();
+  }
+  if (action === 'test-key') {
+    const input = document.getElementById('s-key');
+    if (input) {
+      data.keys.plantnet = input.value.trim();
+      persist({ resched: false });
+    }
+    if (!data.keys.plantnet) {
+      keyMsg = 'Pegá primero tu clave.';
+      return rerender();
+    }
+    if (!online()) {
+      keyMsg = 'Necesito internet para probar la clave.';
+      return rerender();
+    }
+    keyMsg = 'Probando…';
+    rerender();
+    const r = await testKey(data.keys.plantnet);
+    keyMsg = r.ok
+      ? '✅ PlantNet aceptó la clave.'
+      : `PlantNet respondió error ${r.status}${r.msg ? `: ${r.msg}` : ''}.`;
+    return rerender();
   }
   if (action === 'sync-now') {
     toast('Completando…');

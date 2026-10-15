@@ -47,6 +47,33 @@ export function parsePlantNet(json) {
   }));
 }
 
+async function readError(res) {
+  try {
+    const t = await res.text();
+    try {
+      const j = JSON.parse(t);
+      return String(j.message || j.error || t).slice(0, 140);
+    } catch {
+      return t.slice(0, 140);
+    }
+  } catch {
+    return '';
+  }
+}
+
+const detail = (status, msg) => `(error ${status}${msg ? `: ${msg}` : ''})`;
+
+/** Prueba la clave sin mandar ninguna foto. */
+export async function testKey(apiKey) {
+  try {
+    const res = await fetch(`https://my-api.plantnet.org/v2/projects?api-key=${encodeURIComponent(apiKey)}`);
+    if (res.ok) return { ok: true, status: res.status, msg: '' };
+    return { ok: false, status: res.status, msg: await readError(res) };
+  } catch {
+    return { ok: false, status: 0, msg: 'No pude conectarme con PlantNet.' };
+  }
+}
+
 export async function identifyPlant(dataUrl, apiKey) {
   const blob = await (await fetch(dataUrl)).blob();
   const form = new FormData();
@@ -63,9 +90,13 @@ export async function identifyPlant(dataUrl, apiKey) {
     throw new Error('No pude conectarme con PlantNet. Revisá tu conexión.');
   }
   if (res.status === 404) return []; // PlantNet: no encontró ninguna especie
-  if (res.status === 401 || res.status === 403) throw new Error('La clave de PlantNet no es válida. Revisala en Ajustes.');
   if (res.status === 429) throw new Error('Llegaste al límite diario gratuito de PlantNet. Probá mañana o cargá la especie a mano.');
-  if (!res.ok) throw new Error(`PlantNet respondió con error ${res.status}.`);
+  if (!res.ok) {
+    const d = detail(res.status, await readError(res));
+    if (res.status === 401) throw new Error(`PlantNet no aceptó la clave ${d}. Usá “Probar clave” en Ajustes.`);
+    if (res.status === 403) throw new Error(`PlantNet rechazó el pedido ${d}. Puede ser un permiso de la clave: usá “Probar clave” en Ajustes.`);
+    throw new Error(`PlantNet respondió con un error ${d}.`);
+  }
   return parsePlantNet(await res.json());
 }
 
