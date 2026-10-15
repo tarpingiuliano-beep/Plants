@@ -55,7 +55,9 @@ jobs:
           grep -n "uses-permission\|uses-feature" "$MANIFEST"
 
       - name: Sincronizar Capacitor
-        run: npx cap sync android
+        run: |
+          npx cap sync android
+          grep -q '"CapacitorHttp"' android/app/src/main/assets/capacitor.config.json || { echo "CapacitorHttp no quedó activado"; exit 1; }
 
       - name: Firmar siempre con la misma clave (así Android acepta las actualizaciones)
         run: |

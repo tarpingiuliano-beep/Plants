@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { lookup, searchSpecies, advice, placementOf, PLACEMENTS } from '../src/species.js';
 import { adjustedDays, summarizeClimate, buildColdAlerts } from '../src/logic.js';
-import { parsePlantNet, identifyPlant, testKey } from '../src/net.js';
+import { parsePlantNet, identifyPlant, testKey, dataUrlToBlob } from '../src/net.js';
 
 test('lookup: especie exacta, género, familia y genérico', () => {
   assert.equal(lookup('Monstera deliciosa').source, 'especie');
@@ -137,6 +137,32 @@ test('PlantNet: manejo de errores HTTP', async () => {
     await assert.rejects(identifyPlant(photo, 'k'), /límite/);
     globalThis.fetch = mock(200, { results: [{ score: 0.5, species: { scientificNameWithoutAuthor: 'Aloe vera' } }] });
     assert.equal((await identifyPlant(photo, 'k'))[0].sci, 'Aloe vera');
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+test('data URL -> Blob conserva tipo y bytes', async () => {
+  const b = dataUrlToBlob('data:image/jpeg;base64,/9j/4AAQ');
+  assert.equal(b.type, 'image/jpeg');
+  assert.deepEqual([...new Uint8Array(await b.arrayBuffer())], [255, 216, 255, 224, 0, 16]);
+});
+
+test('la subida a PlantNet va como multipart con la foto como archivo', async () => {
+  const realFetch = globalThis.fetch;
+  let sent;
+  globalThis.fetch = async (url, opts) => {
+    sent = { url: String(url), body: opts.body, method: opts.method };
+    return new Response(JSON.stringify({ results: [] }), { status: 200 });
+  };
+  try {
+    await identifyPlant('data:image/jpeg;base64,/9j/4AAQ', 'MI-CLAVE');
+    assert.equal(sent.method, 'POST');
+    assert.match(sent.url, /api-key=MI-CLAVE/);
+    const f = sent.body.get('images');
+    assert.equal(f.name, 'foto.jpg');
+    assert.equal(f.type, 'image/jpeg');
+    assert.equal(sent.body.get('organs'), 'auto');
   } finally {
     globalThis.fetch = realFetch;
   }

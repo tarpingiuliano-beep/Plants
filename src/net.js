@@ -74,8 +74,18 @@ export async function testKey(apiKey) {
   }
 }
 
+/** data URL -> Blob sin pasar por fetch (con CapacitorHttp activo, fetch iría por la red nativa). */
+export function dataUrlToBlob(dataUrl) {
+  const [head, b64 = ''] = String(dataUrl).split(',');
+  const type = /data:([^;]+)/.exec(head)?.[1] || 'image/jpeg';
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return new Blob([bytes], { type });
+}
+
 export async function identifyPlant(dataUrl, apiKey) {
-  const blob = await (await fetch(dataUrl)).blob();
+  const blob = dataUrlToBlob(dataUrl);
   const form = new FormData();
   form.append('images', blob, 'foto.jpg');
   form.append('organs', 'auto');
