@@ -97,7 +97,10 @@ export function buildSchedule(plants, settings, now = new Date()) {
   return out;
 }
 
-export function newPlant({ nid, name, species, location, photo, everyDays, lastWatered }, now = new Date()) {
+export function newPlant(
+  { nid, name, species, location, photo, everyDays, lastWatered, sci, genus, family, placement, auto, baseDays },
+  now = new Date(),
+) {
   return {
     id: `p${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`,
     nid,
@@ -105,6 +108,12 @@ export function newPlant({ nid, name, species, location, photo, everyDays, lastW
     species: (species || '').trim(),
     location: (location || '').trim(),
     photo: photo || '',
+    sci: sci || '',
+    genus: genus || '',
+    family: family || '',
+    placement: placement || 'interior-luz',
+    auto: !!auto,
+    baseDays: Number(baseDays) || 0,
     everyDays: Math.max(1, Math.min(365, Number(everyDays) || 7)),
     lastWatered: lastWatered || dateStr(now),
     createdAt: now.toISOString(),
@@ -126,4 +135,80 @@ export function addNote(plant, note, when = new Date()) {
     ...plant,
     history: [{ at: when.toISOString(), type: 'nota', note }, ...plant.history].slice(0, 200),
   };
+}
+
+/* ---------- Clima y ubicación ---------- */
+
+/** Cuánto se alarga (>1) o acorta (<1) el intervalo según la temperatura media. */
+export function tempFactor(t) {
+  if (t <= 8) return 1.9;
+  if (t <= 14) return 1.5;
+  if (t <= 19) return 1.15;
+  if (t <= 25) return 1;
+  if (t <= 30) return 0.8;
+  return 0.65;
+}
+
+/**
+ * Días entre riegos para una planta, a partir del valor base de su especie,
+ * el lugar donde está y la temperatura media pronosticada.
+ * Adentro el clima pega la mitad que afuera.
+ */
+export function adjustedDays(baseDays, placement, avgTemp) {
+  let f = 1;
+  if (Number.isFinite(avgTemp)) {
+    const tf = tempFactor(avgTemp);
+    f = placement.outdoor ? tf : 1 + (tf - 1) * 0.5;
+  }
+  return Math.max(1, Math.min(60, Math.round(baseDays * f * (placement.dry ?? 1))));
+}
+
+/** Resume el pronóstico diario [{date,max,min,rain}] en lo que usa la app. */
+export function summarizeClimate(days, now = Date.now()) {
+  const valid = days.filter((d) => Number.isFinite(d.max) && Number.isFinite(d.min));
+  if (!valid.length) return null;
+  const avgTemp = valid.reduce((a, d) => a + (d.max + d.min) / 2, 0) / valid.length;
+  const next3 = valid.slice(0, 3);
+  const coldest = next3.reduce((m, d) => (d.min < m.min ? d : m), next3[0]);
+  return {
+    fetchedAt: now,
+    avgTemp: Math.round(avgTemp * 10) / 10,
+    minNext3: coldest.min,
+    minDate: coldest.date,
+    rainToday: valid[0].rain || 0,
+    rainTomorrow: valid[1]?.rain || 0,
+    days: valid.map((d) => ({ date: d.date, max: d.max, min: d.min, rain: d.rain || 0 })),
+  };
+}
+
+/** Plantas de afuera que no aguantan la mínima de ese día. */
+export function plantsAtColdRisk(plants, minTemp, getCare, placementLookup) {
+  return plants.filter((p) => {
+    if (!placementLookup(p.placement).outdoor) return false;
+    const care = getCare(p);
+    return care && minTemp < care.minTemp;
+  });
+}
+
+export const COLD_ALERT_FROM = 4; // °C: desde acá avisamos
+
+/** Notificaciones de "noche fría" a las 19:00 para los próximos 3 días. */
+export function buildColdAlerts(plants, climate, getCare, placementLookup, now = new Date()) {
+  if (!climate?.days) return [];
+  const out = [];
+  climate.days.slice(0, 3).forEach((d, i) => {
+    if (d.min > COLD_ALERT_FROM) return;
+    const risk = plantsAtColdRisk(plants, d.min, getCare, placementLookup);
+    if (!risk.length) return;
+    const at = atTime(d.date, 19, 0);
+    if (at <= now) return;
+    out.push({
+      id: 900001 + i,
+      plantId: risk[0].id,
+      title: d.min <= 0 ? '❄️ Helada esta noche' : '🥶 Noche fría',
+      body: `Mínima de ${Math.round(d.min)} °C. Entrá o cubrí: ${risk.map((p) => p.name).join(', ')}`,
+      at,
+    });
+  });
+  return out;
 }

@@ -46,7 +46,7 @@ export async function setupChannel() {
  * Cancela todo lo programado y vuelve a programar según el estado actual.
  * Es barato y evita que queden avisos viejos.
  */
-export async function reschedule(plants, settings) {
+export async function reschedule(plants, settings, extras = []) {
   if (!isNative()) return { count: 0 };
   try {
     const perm = await LocalNotifications.checkPermissions();
@@ -56,7 +56,7 @@ export async function reschedule(plants, settings) {
     }
     if (perm.display !== 'granted') return { count: 0, denied: true };
 
-    const items = buildSchedule(plants, settings);
+    const items = [...buildSchedule(plants, settings), ...extras];
     if (!items.length) return { count: 0 };
     await LocalNotifications.schedule({
       notifications: items.map((i) => ({

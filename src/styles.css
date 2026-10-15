@@ -379,3 +379,155 @@ input:focus {
   opacity: 1;
   transform: translate(-50%, 0);
 }
+
+/* Avisos de clima */
+.banner.cold {
+  background: var(--blue-soft);
+  color: var(--blue);
+}
+.banner.rain {
+  background: var(--blue-soft);
+  color: var(--blue);
+}
+
+/* Identificación */
+.status {
+  background: var(--green-soft);
+  color: var(--green);
+  border-radius: 14px;
+  padding: 12px 14px;
+  font-size: 0.92rem;
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.status.warn {
+  background: var(--amber-soft);
+  color: var(--amber);
+}
+.status .btn {
+  padding: 8px 12px;
+  background: var(--amber);
+  color: #fff;
+}
+.cands {
+  display: grid;
+  gap: 8px;
+}
+.cand {
+  text-align: left;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  border: 2px solid var(--line);
+  background: var(--card);
+  cursor: pointer;
+}
+.cand.on {
+  border-color: var(--green);
+  background: var(--green-soft);
+}
+
+/* Lugar */
+.pchips {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+.pchip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  text-align: left;
+  padding: 10px 12px;
+  border-radius: 14px;
+  border: 2px solid var(--line);
+  background: var(--card);
+  font-size: 0.88rem;
+  line-height: 1.25;
+  cursor: pointer;
+}
+.pchip span {
+  font-size: 1.4rem;
+}
+.pchip.on {
+  border-color: var(--green);
+  background: var(--green-soft);
+}
+
+/* Ficha de cuidados */
+.care {
+  padding: 14px;
+}
+.care-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  align-items: baseline;
+  margin-bottom: 10px;
+}
+.care-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+.care-grid > div {
+  background: var(--bg);
+  border-radius: 12px;
+  padding: 10px 12px;
+  font-size: 0.9rem;
+}
+.care-grid b {
+  display: block;
+}
+.notes {
+  margin: 12px 0 0;
+  padding: 0;
+  list-style: none;
+  font-size: 0.9rem;
+}
+.notes li + li {
+  margin-top: 6px;
+}
+.wiki {
+  margin: 12px 0 0;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 0.88rem;
+}
+.auto-box {
+  background: var(--blue-soft);
+  color: var(--blue);
+  border-radius: 14px;
+  padding: 12px 14px;
+}
+.auto-box .sub {
+  display: block;
+  color: inherit;
+  opacity: 0.85;
+  white-space: normal;
+}
+label.check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.95rem;
+  color: var(--ink);
+  margin: 4px 0 0;
+}
+label.check input {
+  width: 20px;
+  height: 20px;
+  accent-color: var(--green);
+}
+input[type='password'] {
+  width: 100%;
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1.5px solid var(--line);
+  background: var(--card);
+}

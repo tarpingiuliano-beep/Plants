@@ -30,17 +30,20 @@ jobs:
       - name: Tests de lógica
         run: npm test
 
+      - name: Tests de interfaz
+        run: npm run test:ui
+
       - name: Compilar web
         run: npm run build
 
       - name: Crear proyecto Android
         run: npx cap add android
 
-      - name: Permiso de notificaciones (Android 13+)
+      - name: Permisos de Android (notificaciones y ubicación)
         run: |
           MANIFEST=android/app/src/main/AndroidManifest.xml
-          sed -i 's#</manifest>#    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />\n</manifest>#' "$MANIFEST"
-          grep -n "POST_NOTIFICATIONS" "$MANIFEST"
+          sed -i 's#</manifest>#    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />\n    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />\n    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />\n    <uses-feature android:name="android.hardware.location.gps" android:required="false" />\n</manifest>#' "$MANIFEST"
+          grep -n "uses-permission\|uses-feature" "$MANIFEST"
 
       - name: Sincronizar Capacitor
         run: npx cap sync android
