@@ -58,7 +58,7 @@ export function sortPlants(plants, today = dateStr()) {
   );
 }
 
-function atTime(day, hour, minute) {
+export function atTime(day, hour, minute) {
   const d = parseDate(day);
   d.setHours(hour, minute, 0, 0);
   return d;

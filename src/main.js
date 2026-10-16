@@ -3,7 +3,10 @@ import { Camera, CameraResultType, CameraSource } from '@capacitor/camera';
 import { Geolocation } from '@capacitor/geolocation';
 import { load, save } from './store.js';
 import { buildBackup, backupFileName, parseBackup, summarize, replaceWith, mergeWith, needsBackupReminder, lastBackupText } from './backup.js';
-import { shareTextFile } from './files.js';
+import { shareTextFile, copyText, sharePhotosWithText } from './files.js';
+import {
+  MAX_PHOTOS, buildPrompt, parseAnswer, tasksFromActions, completeTask, removeTask, taskState, taskText, dueTasks, buildTaskSchedule,
+} from './novedad.js';
 import {
   dateStr,
   nextDue,
@@ -61,6 +64,8 @@ function toast(msg) {
   toastTimer = setTimeout(() => $toast.classList.remove('show'), 2600);
 }
 
+let nov = null; // "Sumar novedad" en curso
+const newNov = (plantId) => ({ plantId, text: '', photos: [], step: 'form', raw: '', result: null, msg: '' });
 let pendingRestore = null; // { backup, summary } esperando confirmación
 let backupMsg = '';
 
@@ -75,7 +80,7 @@ const getPlant = (id) => data.plants.find((p) => p.id === id);
 const careOf = (p) => (p.sci ? data.species[p.sci]?.care || lookup(p.sci, p.genus, p.family) : null);
 
 /** Avisos de helada/frío para las notificaciones */
-const extraAlerts = () => buildColdAlerts(data.plants, data.climate, careOf, placementOf);
+const extraAlerts = () => [...buildColdAlerts(data.plants, data.climate, careOf, placementOf), ...buildTaskSchedule(data.plants)];
 
 function persist({ resched = true } = {}) {
   if (!save(data)) toast('⚠️ No hay espacio para guardar. Probá con fotos más chicas.');
@@ -323,6 +328,12 @@ function viewList() {
     banners.push(`<div class="banner"><span>💾 ${data.lastBackup ? 'Hace rato que no hacés un respaldo.' : 'Todavía no hiciste un respaldo de tus plantas.'}</span>
       <button class="btn" data-action="settings">Respaldar</button></div>`);
   }
+  const due = dueTasks(data.plants, today);
+  if (due.length) {
+    const first = due[0];
+    banners.push(`<div class="banner"><span>📋 ${due.length === 1 ? '1 tarea para hoy' : `${due.length} tareas para hoy`}: ${esc(first.plant.name)} — ${esc(first.task.title)}${due.length > 1 ? '…' : ''}</span>
+      <button class="btn" data-action="open" data-id="${first.plant.id}">Ver</button></div>`);
+  }
   if (!data.place) {
     banners.push(`<div class="banner"><span>📍 Elegí dónde vivís y ajusto el riego al clima de tu zona.</span>
       <button class="btn" data-action="settings">Elegir</button></div>`);
@@ -410,15 +421,34 @@ function viewDetail(p) {
   const st = waterStatus(p, today);
   const care = careOf(p);
   const sp = data.species[p.sci];
-  const hist = p.history.length
-    ? p.history
+  const histItem = (h) => {
+    if (h.type === 'novedad') {
+      const d = h.diagnosis || {};
+      return `<li><span>🩺</span><div><div>${esc(h.note || 'Novedad')}</div>
+        ${d.causa ? `<div class="sub">Causa probable: ${esc(d.causa)}${d.confianza ? ` (confianza ${esc(d.confianza)})` : ''}</div>` : ''}
+        ${(h.photos || []).length ? `<div class="thumbs">${h.photos.map((x) => `<img src="${x}" alt="" />`).join('')}</div>` : ''}
+        <div class="when">${fmtWhen(h.at)}</div></div></li>`;
+    }
+    return `<li><span>${h.type === 'riego' ? '💧' : '📝'}</span>
+      <div><div>${h.type === 'riego' ? 'Riego' : esc(h.note)}${h.type === 'riego' && h.note ? ` — ${esc(h.note)}` : ''}</div>
+      <div class="when">${fmtWhen(h.at)}</div></div></li>`;
+  };
+  const hist = p.history.length ? p.history.map(histItem).join('') : '<p class="sub">Todavía no hay registros.</p>';
+  const tasks = [...(p.tasks || [])].sort((a, b) => (a.due + a.time).localeCompare(b.due + b.time));
+  const tasksHtml = tasks.length
+    ? `<h2>Tareas</h2><div class="card" style="padding: 4px 16px"><ul class="history">${tasks
         .map(
-          (h) => `<li><span>${h.type === 'riego' ? '💧' : '📝'}</span>
-            <div><div>${h.type === 'riego' ? 'Riego' : esc(h.note)}${h.type === 'riego' && h.note ? ` — ${esc(h.note)}` : ''}</div>
-            <div class="when">${fmtWhen(h.at)}</div></div></li>`,
+          (t) => `<li><span>${taskState(t, today) === 'later' ? '🗓️' : '⏰'}</span>
+            <div style="flex: 1"><div>${esc(t.title)}</div>
+            ${t.detail ? `<div class="sub">${esc(t.detail)}</div>` : ''}
+            <div class="when">${esc(taskText(t, today))}</div>
+            <div class="row" style="margin-top: 6px">
+              <button class="btn secondary" data-action="task-done" data-id="${p.id}" data-tid="${t.id}">✓ Hecha</button>
+              <button class="btn secondary" data-action="task-del" data-id="${p.id}" data-tid="${t.id}" aria-label="Borrar tarea">🗑</button>
+            </div></div></li>`,
         )
-        .join('')
-    : '<p class="sub">Todavía no hay registros.</p>';
+        .join('')}</ul></div>`
+    : '';
 
   return `<div class="topbar">
       <button class="icon-btn" data-action="back" aria-label="Volver">←</button>
@@ -439,9 +469,11 @@ function viewDetail(p) {
           <div class="fact"><span class="sub">Aviso</span><b>${pad(data.settings.hour)}:${pad(data.settings.minute)}</b></div>
         </div>
         <button class="btn blue block" data-action="water" data-id="${p.id}">💧 Ya la regué</button>
+        <button class="btn secondary block" style="margin-top: 8px" data-action="nov-start" data-id="${p.id}">🩺 Sumar novedad</button>
       </div>
     </div>
     ${care ? `<div style="margin-top: 12px">${careCardHtml(care, placementOf(p.placement), { wiki: sp?.wiki })}</div>` : ''}
+    ${tasksHtml}
     <h2>Historial</h2>
     <div class="card" style="padding: 4px 16px"><ul class="history">${hist}</ul></div>
     <div class="row" style="margin-top: 12px">
@@ -633,6 +665,144 @@ function viewSettings() {
     <p class="hint" style="text-align: center; margin-top: 18px">Plantas · build ${esc(__BUILD__)}</p>`;
 }
 
+
+/* ---------- sumar novedad ---------- */
+
+const novPrompt = (p) =>
+  buildPrompt({
+    plant: p, care: careOf(p), placement: placementOf(p.placement), place: data.place, climate: data.climate,
+    text: nov.text, photoCount: nov.photos.length,
+  });
+
+function viewNovedad(p) {
+  const head = `<div class="topbar">
+      <button class="icon-btn" data-action="back" aria-label="Volver">←</button>
+      <h1>Novedad · ${esc(p.name)}</h1></div>`;
+
+  if (nov.step === 'form') {
+    return `${head}
+    <div class="card" style="padding: 16px">
+      <label for="nov-text" style="margin-top: 0">¿Qué notaste?</label>
+      <textarea id="nov-text" rows="4" maxlength="600" placeholder="Ej: le salieron manchas marrones en las hojas de abajo, hace 3 días">${esc(nov.text)}</textarea>
+      <div class="thumbs" style="margin-top: 10px">${nov.photos
+        .map((x, i) => `<span class="thumb"><img src="${x}" alt="" /><button type="button" class="x" data-action="nov-rm-photo" data-i="${i}" aria-label="Quitar foto">✕</button></span>`)
+        .join('')}</div>
+      ${nov.photos.length < MAX_PHOTOS ? `<button class="btn secondary block" style="margin-top: 10px" data-action="nov-add-photo">📷 Agregar foto (${nov.photos.length}/${MAX_PHOTOS})</button>` : ''}
+      <input type="file" id="nov-photo-input" accept="image/*" hidden />
+      ${nov.msg ? `<p class="status warn" style="margin-top: 10px">${esc(nov.msg)}</p>` : ''}
+      <button class="btn block" style="margin-top: 12px" data-action="nov-build">Armar el pedido para Gemini</button>
+      <p class="hint">Sin claves: te preparo el texto con los datos de la planta, vos lo llevás a Gemini junto con las fotos y me traés la respuesta.</p>
+    </div>`;
+  }
+
+  if (nov.step === 'ask') {
+    return `${head}
+    <div class="card" style="padding: 16px">
+      <b>1. Llevalo a Gemini</b>
+      <p class="sub" style="margin: 4px 0 10px">Compartí las fotos y el pedido juntos (elegí Gemini en el menú), o copiá el pedido y adjuntá las fotos a mano.</p>
+      <button class="btn block" data-action="nov-share">📤 Compartir fotos y pedido</button>
+      <button class="btn secondary block" style="margin-top: 8px" data-action="nov-copy">📋 Copiar el pedido</button>
+      <details style="margin-top: 10px"><summary class="sub">Ver el pedido</summary>
+        <textarea rows="8" readonly>${esc(novPrompt(p))}</textarea></details>
+    </div>
+    <div class="card" style="padding: 16px; margin-top: 12px">
+      <b>2. Traé la respuesta</b>
+      <p class="sub" style="margin: 4px 0 10px">Copiá toda la respuesta de Gemini y pegala acá.</p>
+      <textarea id="nov-raw" rows="6" placeholder="Pegá la respuesta de Gemini">${esc(nov.raw)}</textarea>
+      ${nov.msg ? `<p class="status warn" style="margin-top: 10px">${esc(nov.msg)}</p>` : ''}
+      <button class="btn block" style="margin-top: 10px" data-action="nov-read">Leer respuesta</button>
+      <button class="btn secondary block" style="margin-top: 8px" data-action="nov-edit">← Cambiar lo que escribí</button>
+    </div>`;
+  }
+
+  const r = nov.result;
+  return `${head}
+    <div class="card" style="padding: 16px">
+      ${r.resumen ? `<p style="margin: 0 0 8px">${esc(r.resumen)}</p>` : ''}
+      ${r.causa ? `<div><span class="sub">Causa probable</span><br /><b>${esc(r.causa)}</b></div>` : ''}
+      <div style="margin-top: 8px"><span class="chip ${r.gravedad === 'seria' ? 'overdue' : r.gravedad === 'moderada' ? 'today' : 'ok'}">Gravedad ${esc(r.gravedad)}</span>
+        <span class="chip soon">Confianza ${esc(r.confianza)}</span></div>
+      ${r.dudas.length ? `<p class="hint">Para estar más seguro: ${r.dudas.map(esc).join(' · ')}</p>` : ''}
+      <p class="hint">Es una orientación de una IA, no un diagnóstico. Si se ve grave, consultá en un vivero.</p>
+    </div>
+    ${
+      r.acciones.length
+        ? `<h2>Tareas sugeridas</h2><p class="sub" style="margin: -4px 0 8px">Tildá las que quieras. Podés cambiar los días y la hora del aviso.</p>
+    ${r.acciones
+      .map(
+        (a, i) => `<div class="card" style="padding: 14px; margin-bottom: 10px">
+        <label class="check"><input type="checkbox" class="nov-chk" data-i="${i}" checked /> <b>${esc(a.titulo)}</b></label>
+        ${a.detalle ? `<div class="sub" style="margin: 4px 0 8px">${esc(a.detalle)}</div>` : ''}
+        ${a.repetir_cada_dias ? `<div class="sub">Se repite cada ${a.repetir_cada_dias} días${a.veces ? `, ${a.veces} veces` : ''}</div>` : ''}
+        <div class="row" style="margin-top: 8px">
+          <div><label class="sub">Dentro de (días)</label><input type="number" class="nov-days" data-i="${i}" min="0" max="365" value="${a.en_dias}" /></div>
+          <div><label class="sub">Aviso a las</label><input type="time" class="nov-time" data-i="${i}" value="${pad(data.settings.hour)}:${pad(data.settings.minute)}" /></div>
+        </div></div>`,
+      )
+      .join('')}`
+        : '<p class="sub">Gemini no sugirió tareas.</p>'
+    }
+    ${nov.msg ? `<p class="status warn">${esc(nov.msg)}</p>` : ''}
+    <button class="btn block" data-action="nov-save">${r.acciones.length ? 'Crear tareas y guardar' : 'Guardar en el historial'}</button>
+    ${r.acciones.length ? '<button class="btn secondary block" style="margin-top: 8px" data-action="nov-save-only">Guardar solo en el historial</button>' : ''}
+    <button class="btn secondary block" style="margin-top: 8px" data-action="nov-back-ask">← Pegar otra respuesta</button>`;
+}
+
+function syncNov() {
+  const t = document.getElementById('nov-text');
+  if (t) nov.text = t.value;
+  const r = document.getElementById('nov-raw');
+  if (r) nov.raw = r.value;
+}
+
+async function addNovPhoto() {
+  syncNov();
+  if (nov.photos.length >= MAX_PHOTOS) return;
+  if (!isNative()) return document.getElementById('nov-photo-input')?.click();
+  try {
+    const ph = await Camera.getPhoto({
+      quality: 80, width: 1024, resultType: CameraResultType.DataUrl, source: CameraSource.Prompt,
+      promptLabelHeader: 'Foto de la planta', promptLabelPhoto: 'Elegir de la galería',
+      promptLabelPicture: 'Sacar foto', promptLabelCancel: 'Cancelar',
+    });
+    if (ph.dataUrl) nov.photos.push(await shrink(ph.dataUrl, 900));
+  } catch {
+    return; // canceló
+  }
+  rerender();
+}
+
+async function saveNov(withTasks) {
+  const p = getPlant(nov.plantId);
+  if (!p) return;
+  const r = nov.result;
+  let picks = [];
+  if (withTasks) {
+    picks = r.acciones
+      .map((a, i) => {
+        if (!document.querySelector(`.nov-chk[data-i="${i}"]`)?.checked) return null;
+        const days = Number(document.querySelector(`.nov-days[data-i="${i}"]`)?.value);
+        const time = document.querySelector(`.nov-time[data-i="${i}"]`)?.value || '09:00';
+        return { ...a, en_dias: Number.isFinite(days) ? Math.max(0, Math.min(365, Math.round(days))) : a.en_dias, time };
+      })
+      .filter(Boolean);
+  }
+  const thumbs = await Promise.all(nov.photos.map((x) => shrink(x, 220)));
+  const entry = {
+    at: new Date().toISOString(), type: 'novedad', note: nov.text.trim() || 'Novedad con fotos',
+    photos: thumbs, diagnosis: { resumen: r.resumen, causa: r.causa, confianza: r.confianza, gravedad: r.gravedad },
+  };
+  data.plants = data.plants.map((x) =>
+    x.id === p.id
+      ? { ...x, history: [entry, ...x.history].slice(0, 200), tasks: [...(x.tasks || []), ...tasksFromActions(picks)] }
+      : x,
+  );
+  persist();
+  nov = null;
+  toast(picks.length ? `Guardado · ${picks.length} ${picks.length === 1 ? 'tarea creada' : 'tareas creadas'} 🔔` : 'Guardado en el historial');
+  go(`/p/${p.id}`, true);
+}
+
 /* ---------- router ---------- */
 
 function render() {
@@ -645,12 +815,15 @@ function render() {
   } else if (name === 'edit' && getPlant(id)) {
     if (!draft || draft.id !== id) draft = newDraft(getPlant(id));
     html = viewForm();
+  } else if (name === 'novedad' && getPlant(id)) {
+    if (!nov || nov.plantId !== id) nov = newNov(id);
+    html = viewNovedad(getPlant(id));
   } else if (name === 'ajustes') html = viewSettings();
   else html = viewList();
 
   const keepScroll = window.scrollY;
   $app.innerHTML = html;
-  if (['new', 'edit', 'ajustes'].includes(name) && window.__keepScroll) window.scrollTo(0, keepScroll);
+  if (['new', 'edit', 'ajustes', 'novedad'].includes(name) && window.__keepScroll) window.scrollTo(0, keepScroll);
   else window.scrollTo(0, 0);
   window.__keepScroll = false;
 }
@@ -844,6 +1017,76 @@ $app.addEventListener('click', async (e) => {
     return rerender();
   }
 
+  if (action === 'nov-start') {
+    nov = newNov(id);
+    return go(`/novedad/${id}`);
+  }
+  if (nov && routeName() === 'novedad') {
+    if (action === 'nov-add-photo') return addNovPhoto();
+    if (action === 'nov-rm-photo') {
+      syncNov();
+      nov.photos.splice(Number(i), 1);
+      return rerender();
+    }
+    if (action === 'nov-build') {
+      syncNov();
+      if (!nov.text.trim() && !nov.photos.length) {
+        nov.msg = 'Escribí qué notaste o agregá al menos una foto.';
+        return rerender();
+      }
+      nov.msg = '';
+      nov.step = 'ask';
+      return render();
+    }
+    if (action === 'nov-edit') {
+      syncNov();
+      nov.step = 'form';
+      nov.msg = '';
+      return render();
+    }
+    if (action === 'nov-copy') {
+      const ok = await copyText(novPrompt(getPlant(nov.plantId)));
+      return toast(ok ? 'Pedido copiado. Pegalo en Gemini 📋' : 'No pude copiarlo. Abrí “Ver el pedido” y copialo a mano.');
+    }
+    if (action === 'nov-share') {
+      syncNov();
+      try {
+        const r = await sharePhotosWithText(novPrompt(getPlant(nov.plantId)), nov.photos);
+        if (r === 'unsupported') return toast('Compartir funciona en la app de Android. Usá “Copiar el pedido”.');
+      } catch {
+        toast('No pude compartir. Probá con “Copiar el pedido”.');
+      }
+      return;
+    }
+    if (action === 'nov-read') {
+      syncNov();
+      const r = parseAnswer(nov.raw);
+      if (!r.ok) {
+        nov.msg = r.error;
+        return rerender();
+      }
+      nov.msg = '';
+      nov.result = r.result;
+      nov.step = 'review';
+      return render();
+    }
+    if (action === 'nov-back-ask') {
+      nov.step = 'ask';
+      nov.msg = '';
+      return render();
+    }
+    if (action === 'nov-save') return saveNov(true);
+    if (action === 'nov-save-only') return saveNov(false);
+  }
+  if (action === 'task-done' || action === 'task-del') {
+    const { tid } = el.dataset;
+    data.plants = data.plants.map((x) =>
+      x.id === id ? { ...x, tasks: action === 'task-done' ? completeTask(x.tasks || [], tid) : removeTask(x.tasks || [], tid) } : x,
+    );
+    persist();
+    toast(action === 'task-done' ? 'Tarea hecha ✓' : 'Tarea borrada');
+    return render();
+  }
   if (action === 'sync-now') {
     toast('Completando…');
     await syncSpecies();
@@ -935,6 +1178,15 @@ $app.addEventListener('change', async (e) => {
       backupMsg = 'No pude leer el archivo.';
     }
     return rerender();
+  }
+  if (t.id === 'nov-photo-input' && t.files[0] && nov) {
+    try {
+      syncNov();
+      nov.photos.push(await shrink(await fileToDataURL(t.files[0]), 900));
+      rerender();
+    } catch (err) {
+      toast(err.message);
+    }
   }
   if (t.id === 'f-species') {
     syncDraft();
