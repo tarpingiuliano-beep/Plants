@@ -2,6 +2,8 @@ import './styles.css';
 import { Camera, CameraResultType, CameraSource } from '@capacitor/camera';
 import { Geolocation } from '@capacitor/geolocation';
 import { load, save } from './store.js';
+import { buildBackup, backupFileName, parseBackup, summarize, replaceWith, mergeWith, needsBackupReminder, lastBackupText } from './backup.js';
+import { shareTextFile } from './files.js';
 import {
   dateStr,
   nextDue,
@@ -58,6 +60,9 @@ function toast(msg) {
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => $toast.classList.remove('show'), 2600);
 }
+
+let pendingRestore = null; // { backup, summary } esperando confirmación
+let backupMsg = '';
 
 const route = () => location.hash.replace(/^#/, '') || '/';
 const routeName = () => route().split('/')[1] || '';
@@ -313,6 +318,10 @@ function viewList() {
   if (isNative() && perm !== 'granted') {
     banners.push(`<div class="banner"><span>🔔 Activá las notificaciones para que te avise cuándo regar.</span>
       <button class="btn" data-action="ask-perm">Activar</button></div>`);
+  }
+  if (needsBackupReminder(data.plants.length, data.lastBackup)) {
+    banners.push(`<div class="banner"><span>💾 ${data.lastBackup ? 'Hace rato que no hacés un respaldo.' : 'Todavía no hiciste un respaldo de tus plantas.'}</span>
+      <button class="btn" data-action="settings">Respaldar</button></div>`);
   }
   if (!data.place) {
     banners.push(`<div class="banner"><span>📍 Elegí dónde vivís y ajusto el riego al clima de tu zona.</span>
@@ -598,6 +607,29 @@ function viewSettings() {
       }
       ${online() && species.some((s) => !s.wiki) ? '<button class="btn secondary block" style="margin-top: 10px" data-action="sync-now">Completar ahora</button>' : ''}
     </div>
+
+    <div class="card" style="padding: 16px; margin-top: 12px">
+      <b>💾 Respaldo</b>
+      <p class="sub" style="margin: 4px 0 8px">${data.plants.length} plantas · ${species.length} especies guardadas. ${lastBackupText(data.lastBackup)}</p>
+      <p class="hint" style="margin-top: 0">Si desinstalás la app o cambiás de celu, se pierde todo. El archivo no incluye tu clave de PlantNet.</p>
+      <button class="btn block" data-action="backup-save">Guardar respaldo</button>
+      <button class="btn secondary block" style="margin-top: 8px" data-action="backup-pick">Restaurar desde un archivo</button>
+      <input type="file" id="backup-input" accept=".json,application/json" hidden />
+      ${backupMsg ? `<p class="status ${backupMsg.startsWith('✅') ? '' : 'warn'}" style="margin-top: 10px">${esc(backupMsg)}</p>` : ''}
+      ${
+        pendingRestore
+          ? `<div class="banner" style="display: block; margin-top: 10px">
+              <b>Este respaldo tiene ${pendingRestore.summary.plants} plantas y ${pendingRestore.summary.species} especies</b>
+              ${pendingRestore.backup.exportedAt ? `<div class="sub">Guardado el ${esc(fmtWhen(pendingRestore.backup.exportedAt))}</div>` : ''}
+              <div class="stack" style="margin-top: 10px">
+                <button class="btn block" data-action="restore-merge">Sumar a lo que ya tengo</button>
+                <button class="btn danger block" data-action="restore-replace">Reemplazar todo (borra lo actual)</button>
+                <button class="btn secondary block" data-action="restore-cancel">Cancelar</button>
+              </div></div>`
+          : ''
+      }
+    </div>
+
     <p class="hint" style="text-align: center; margin-top: 18px">Plantas · build ${esc(__BUILD__)}</p>`;
 }
 
@@ -773,6 +805,45 @@ $app.addEventListener('click', async (e) => {
       : `PlantNet respondió error ${r.status}${r.msg ? `: ${r.msg}` : ''}.`;
     return rerender();
   }
+  if (action === 'backup-save') {
+    try {
+      const r = await shareTextFile(backupFileName(), JSON.stringify(buildBackup(data), null, 1));
+      if (r !== 'cancelled') {
+        data.lastBackup = new Date().toISOString();
+        persist({ resched: false });
+        backupMsg = r === 'downloaded' ? '✅ Respaldo descargado.' : '✅ Respaldo listo. Guardalo en Drive o mandátelo por WhatsApp.';
+      }
+    } catch {
+      backupMsg = 'No pude guardar el respaldo. Probá de nuevo.';
+    }
+    return rerender();
+  }
+  if (action === 'backup-pick') return document.getElementById('backup-input')?.click();
+  if (action === 'restore-cancel') {
+    pendingRestore = null;
+    backupMsg = '';
+    return rerender();
+  }
+  if (action === 'restore-merge' || action === 'restore-replace') {
+    if (!pendingRestore) return;
+    const incoming = pendingRestore.backup.data;
+    let msg;
+    if (action === 'restore-merge') {
+      const r = mergeWith(data, incoming);
+      data = r.data;
+      msg = `✅ Sumé ${r.added} plantas${r.skipped ? ` (${r.skipped} ya estaban)` : ''}.`;
+    } else {
+      data = replaceWith(data, incoming);
+      msg = `✅ Restauré ${incoming.plants.length} plantas.`;
+    }
+    pendingRestore = null;
+    backupMsg = msg;
+    persist();
+    applyClimate();
+    syncOnline();
+    return rerender();
+  }
+
   if (action === 'sync-now') {
     toast('Completando…');
     await syncSpecies();
@@ -847,6 +918,23 @@ $app.addEventListener('change', async (e) => {
     } catch (err) {
       toast(err.message);
     }
+  }
+  if (t.id === 'backup-input' && t.files[0]) {
+    const file = t.files[0];
+    t.value = '';
+    try {
+      const r = parseBackup(await file.text());
+      if (r.ok) {
+        pendingRestore = { backup: r.backup, summary: summarize(r.backup.data) };
+        backupMsg = '';
+      } else {
+        pendingRestore = null;
+        backupMsg = r.error;
+      }
+    } catch {
+      backupMsg = 'No pude leer el archivo.';
+    }
+    return rerender();
   }
   if (t.id === 'f-species') {
     syncDraft();
