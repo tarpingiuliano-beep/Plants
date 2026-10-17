@@ -167,3 +167,14 @@ test('la subida a PlantNet va como multipart con la foto como archivo', async ()
     globalThis.fetch = realFetch;
   }
 });
+
+test('Impatiens hawkeri: riego frecuente (antes caía en el genérico de ~7 días)', () => {
+  const c = lookup('Impatiens hawkeri', 'Impatiens', 'Balsaminaceae');
+  assert.equal(c.source, 'género');
+  assert.equal(c.days, 3);
+  assert.equal(lookup('Impatiens walleriana').days, 3);
+  assert.equal(lookup('Algo raro', '', 'Balsaminaceae').days, 3);
+  assert.equal(searchSpecies('alegria del hogar')[0].sci, 'impatiens');
+  // en interior luminoso con 22 °C no se alarga
+  assert.ok(adjustedDays(3, placementOf('interior-luz'), 22) <= 3);
+});

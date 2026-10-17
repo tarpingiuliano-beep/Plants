@@ -3,6 +3,7 @@ import { Camera, CameraResultType, CameraSource } from '@capacitor/camera';
 import { Geolocation } from '@capacitor/geolocation';
 import { load, save } from './store.js';
 import { buildBackup, backupFileName, parseBackup, summarize, replaceWith, mergeWith, needsBackupReminder, lastBackupText } from './backup.js';
+import { refreshCare } from './migrate.js';
 import { shareTextFile, copyText, sharePhotosWithText } from './files.js';
 import {
   MAX_PHOTOS, buildPrompt, parseAnswer, tasksFromActions, completeTask, removeTask, taskState, taskText, dueTasks, buildTaskSchedule,
@@ -1226,7 +1227,10 @@ window.addEventListener('online', () => syncOnline());
   onNotificationTap((plantId) => {
     if (getPlant(plantId)) go(`/p/${plantId}`);
   });
+  const r = refreshCare(data, lookup);
+  data.plants = r.plants;
   applyClimate();
+  persist();
   await reschedule(data.plants, data.settings, extraAlerts());
   render();
   syncOnline();

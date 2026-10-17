@@ -153,6 +153,52 @@ const DB = [
     'Crece muy lento. No la riegues en exceso.'),
   E('bougainvillea', ['Bugambilia', 'Santa Rita'], 5, 4, 0, 'baja', 1,
     'Más sol y menos agua = más flores.'),
+  E('impatiens', ['Alegría del hogar', 'Balsamina', 'Impatiens de Nueva Guinea'], 3, 2.5, 10, 'media', 1,
+    'Quiere la tierra siempre apenas húmeda, nunca encharcada: si le falta agua se cae de golpe y se recupera al regarla.', 'Luz brillante sin sol fuerte. Regá la tierra, no las flores. No tolera el frío.'),
+  E('viola', ['Pensamiento', 'Viola'], 3, 3.5, -5, 'media', 1,
+    'Tierra húmeda pero con buen drenaje. Aguanta frío, no el calor fuerte.'),
+  E('primula', ['Primavera', 'Primula'], 3, 2.5, 0, 'media', 1,
+    'Tierra siempre húmeda y lugar fresco.'),
+  E('cyclamen', ['Ciclamen'], 4, 2.5, 5, 'media', 0,
+    'Regá cerca del borde de la maceta, sin mojar el centro de la planta. Le gusta el fresco.'),
+  E('fuchsia', ['Fucsia', 'Aretes'], 3, 2.5, 3, 'media', 1,
+    'Tierra húmeda y semisombra. Sufre con el calor fuerte.'),
+  E('hydrangea', ['Hortensia'], 3, 3, -10, 'media', 1,
+    'Pide mucha agua en verano: las hojas se caen si se seca.', 'Semisombra o sol de mañana.'),
+  E('gerbera', ['Gerbera'], 4, 4, 5, 'media', 1,
+    'Mucha luz. Regá por el borde, sin mojar el centro.'),
+  E('tagetes', ['Copete', 'Caléndula africana', 'Tagetes'], 4, 4, 2, 'media', 1,
+    'Sol pleno y riego regular.'),
+  E('calendula', ['Caléndula'], 4, 4, -3, 'media', 1,
+    'Sol y riego regular; aguanta bien el frío.'),
+  E('zinnia', ['Zinnia'], 4, 4, 5, 'media', 1,
+    'Sol pleno; regá la base, sin mojar las hojas.'),
+  E('dianthus', ['Clavel', 'Clavelina'], 5, 4, -5, 'baja', 1,
+    'Sol y buen drenaje.'),
+  E('verbena', ['Verbena'], 4, 4, 0, 'media', 1,
+    'Sol pleno y riego regular.'),
+  E(['camellia', 'camelia'], ['Camelia'], 5, 2.5, -5, 'media', 1,
+    'Semisombra, tierra ácida y húmeda.'),
+  E(['rhododendron', 'azalea'], ['Azalea', 'Rododendro'], 3, 2.5, -5, 'media', 1,
+    'Tierra ácida siempre húmeda; semisombra.'),
+  E('solanum lycopersicum', ['Tomate'], 3, 4, 8, 'media', 1,
+    'Mucho sol y riego parejo: los altibajos rajan los frutos.'),
+  E('capsicum', ['Morrón', 'Ají', 'Pimiento'], 4, 4, 8, 'media', 1,
+    'Mucho sol y riego regular.'),
+  E('lactuca sativa', ['Lechuga'], 3, 3, 0, 'media', 1,
+    'Tierra siempre húmeda; con calor fuerte se espiga.'),
+  E('fragaria', ['Frutilla'], 3, 4, -5, 'media', 1,
+    'Sol y tierra húmeda; regá sin mojar los frutos.'),
+  E('thymus', ['Tomillo'], 8, 4, -10, 'baja', 1,
+    'Sol pleno; dejá secar entre riegos.'),
+  E('origanum', ['Orégano'], 7, 4, -10, 'baja', 1,
+    'Sol pleno; dejá secar entre riegos.'),
+  E('salvia', ['Salvia'], 5, 4, -5, 'baja', 1,
+    'Sol y buen drenaje.'),
+  E('allium schoenoprasum', ['Cebollín', 'Cebolla de verdeo'], 3, 3.5, -10, 'media', 1,
+    'Tierra apenas húmeda y sol.'),
+  E('coriandrum sativum', ['Cilantro'], 3, 3, 0, 'media', 1,
+    'Tierra húmeda; con calor fuerte florece y se acaba.'),
 ];
 
 // Si no hay datos de la especie ni del género, se usa lo típico de la familia.
@@ -186,6 +232,19 @@ const FAMILIES = {
   myrtaceae: [5, 4, -2, 'media', 1, 'Mucho sol y riego regular.'],
   oleaceae: [5, 3.5, 0, 'media', 1, 'Sol o semisombra y riego regular.'],
   malvaceae: [4, 4, 8, 'media', 1, 'Mucho sol y riego frecuente en verano.'],
+  balsaminaceae: [3, 2.5, 10, 'media', 1, 'Tierra siempre apenas húmeda y luz sin sol fuerte.'],
+  violaceae: [3, 3.5, -5, 'media', 1, 'Tierra húmeda con buen drenaje.'],
+  primulaceae: [3, 2.5, 2, 'media', 1, 'Tierra húmeda y lugar fresco.'],
+  solanaceae: [3, 4, 5, 'media', 1, 'Mucho sol y riego frecuente.'],
+  asteraceae: [4, 4, 0, 'media', 1, 'Mucho sol y riego regular.'],
+  brassicaceae: [3, 3.5, -5, 'media', 1, 'Tierra húmeda y sol.'],
+  apiaceae: [3, 3, 0, 'media', 1, 'Tierra húmeda y luz brillante.'],
+  onagraceae: [3, 2.5, 3, 'media', 1, 'Tierra húmeda y semisombra.'],
+  hydrangeaceae: [3, 3, -10, 'media', 1, 'Pide mucha agua en verano.'],
+  amaryllidaceae: [6, 3, -5, 'media', 1, 'Sol y riego moderado.'],
+  verbenaceae: [4, 4, 0, 'media', 1, 'Sol pleno y riego regular.'],
+  caryophyllaceae: [5, 4, -5, 'baja', 1, 'Sol y buen drenaje.'],
+  ericaceae: [3, 2.5, -5, 'media', 1, 'Tierra ácida siempre húmeda.'],
 };
 
 const GENERIC = {
@@ -269,7 +328,7 @@ export function advice(care, placement) {
     out.push('Le gusta la humedad: rociá las hojas o apoyala sobre una bandeja con piedras y agua.');
   }
   if (care.generic) {
-    out.push('Es una estimación general: no tengo datos de esta especie. Ajustá la frecuencia según cómo responda.');
+    out.push('No tengo datos de esta especie: usé un riego promedio que puede no ser el correcto. Mirá la tierra y la planta, y cambiá la frecuencia a mano si hace falta.');
   }
   return out;
 }
