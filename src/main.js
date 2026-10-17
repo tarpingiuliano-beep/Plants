@@ -4,6 +4,7 @@ import { Geolocation } from '@capacitor/geolocation';
 import { load, save } from './store.js';
 import { buildBackup, backupFileName, parseBackup, summarize, replaceWith, mergeWith, needsBackupReminder, lastBackupText } from './backup.js';
 import { refreshCare } from './migrate.js';
+import { askCare, testGeminiKey } from './ai.js';
 import { shareTextFile, copyText, sharePhotosWithText } from './files.js';
 import {
   MAX_PHOTOS, buildPrompt, parseAnswer, tasksFromActions, completeTask, removeTask, taskState, taskText, dueTasks, buildTaskSchedule,
@@ -40,6 +41,8 @@ let draft = null; // borrador del formulario de planta
 let cityResults = [];
 let cityMsg = '';
 let keyMsg = '';
+let gMsg = '';
+let aiBusy = false;
 
 const $app = document.getElementById('app');
 const $toast = document.getElementById('toast');
@@ -161,9 +164,51 @@ async function syncSpecies() {
   }
 }
 
+/** Pide a Gemini los cuidados de las especies que mi tabla no conoce bien (una vez por especie). */
+async function syncAiCare() {
+  const key = data.keys.gemini;
+  if (!key || !online() || aiBusy) return;
+  aiBusy = true;
+  try {
+    if (!data.keys.geminiModel) {
+      const t = await testGeminiKey(key);
+      if (!t.ok) return;
+      data.keys.geminiModel = t.model;
+    }
+    let changed = false;
+    for (const sp of Object.values(data.species)) {
+      if (['especie', 'IA'].includes(sp.care?.source)) continue;
+      if (sp.aiTried && Date.now() - sp.aiTried < 6 * 3600000) continue;
+      sp.aiTried = Date.now();
+      changed = true;
+      const plant = data.plants.find((p) => p.sci === sp.sci);
+      const r = await askCare(
+        { sci: sp.sci, commonName: sp.names?.[0], family: plant?.family, placement: placementOf(plant?.placement), place: data.place, climate: data.climate },
+        key,
+        data.keys.geminiModel,
+      );
+      if (r.care) {
+        sp.care = r.care;
+        data.plants = data.plants.map((p) => (p.sci === sp.sci && p.auto ? { ...p, baseDays: r.care.days } : p));
+      } else {
+        if (/ 404/.test(r.error || '')) data.keys.geminiModel = '';
+        if (r.quota) break;
+      }
+    }
+    if (changed) {
+      applyClimate();
+      persist();
+      if (['p', 'ajustes', ''].includes(routeName())) render();
+    }
+  } finally {
+    aiBusy = false;
+  }
+}
+
 async function syncOnline() {
   await refreshClimate();
   await syncSpecies();
+  await syncAiCare();
 }
 
 function rememberSpecies(sci, genus, family) {
@@ -397,6 +442,7 @@ function careCardHtml(care, placement, extra = {}) {
     género: 'datos del género (aproximado)',
     familia: 'datos de la familia (aproximado)',
     genérico: 'estimación general',
+    IA: `consultado a Gemini (seguridad ${care.confidence || 'media'})`,
   }[care.source];
   return `<div class="card care">
       <div class="care-head">
@@ -612,6 +658,16 @@ function viewSettings() {
       <button class="btn secondary block" style="margin-top: 10px" data-action="test-key">Probar clave</button>
       ${keyMsg ? `<p class="status ${keyMsg.startsWith('✅') ? '' : 'warn'}" style="margin-top: 10px">${esc(keyMsg)}</p>` : ''}
       <p class="hint">Es gratis: creás una cuenta en my.plantnet.org y copiás la clave de “API”. Queda guardada solo en tu celular.</p>
+    </div>
+
+    <div class="card" style="padding: 16px; margin-top: 12px">
+      <b>🤖 Cuidados con IA (Gemini)</b>
+      <p class="sub" style="margin: 4px 0 8px">Para las plantas que mi tabla no conoce bien, le pregunto a Gemini cada cuánto regarla y qué luz necesita, una sola vez por especie. Después se ajusta sola al clima y a la estación.</p>
+      <label for="s-gkey">Clave de la API de Gemini</label>
+      <input type="password" id="s-gkey" value="${esc(data.keys.gemini)}" placeholder="Pegá tu clave" autocomplete="off" />
+      <button class="btn secondary block" style="margin-top: 10px" data-action="test-gkey">Probar clave</button>
+      ${gMsg ? `<p class="status ${gMsg.startsWith('✅') ? '' : 'warn'}" style="margin-top: 10px">${esc(gMsg)}</p>` : ''}
+      <p class="hint">Se saca gratis en aistudio.google.com → “Get API key” (es distinta de tu suscripción de Google AI Plus). Solo se envía el nombre de la especie, dónde la tenés y el clima general: nunca fotos ni datos tuyos. En el plan gratis Google puede usar esos textos para mejorar sus productos.</p>
     </div>
 
     <div class="card" style="padding: 16px; margin-top: 12px">
@@ -909,7 +965,7 @@ function savePlant() {
   data.nextNid += 1;
   data.plants.push(plant);
   persist();
-  syncSpecies();
+  syncSpecies().then(syncAiCare);
   draft = null;
   toast('Planta agregada 🌿');
   go('/', true);
@@ -1088,6 +1144,35 @@ $app.addEventListener('click', async (e) => {
     toast(action === 'task-done' ? 'Tarea hecha ✓' : 'Tarea borrada');
     return render();
   }
+  if (action === 'test-gkey') {
+    const input = document.getElementById('s-gkey');
+    if (input) {
+      data.keys.gemini = input.value.trim();
+      data.keys.geminiModel = '';
+      persist({ resched: false });
+    }
+    if (!data.keys.gemini) {
+      gMsg = 'Pegá primero tu clave.';
+      return rerender();
+    }
+    if (!online()) {
+      gMsg = 'Necesito internet para probar la clave.';
+      return rerender();
+    }
+    gMsg = 'Probando…';
+    rerender();
+    const r = await testGeminiKey(data.keys.gemini);
+    if (r.ok) {
+      data.keys.geminiModel = r.model;
+      persist({ resched: false });
+      gMsg = `✅ Clave aceptada (modelo ${r.model}). Voy a consultar las especies que lo necesiten.`;
+      rerender();
+      syncAiCare();
+      return;
+    }
+    gMsg = `Google respondió error ${r.status}${r.msg ? `: ${r.msg}` : ''}.`;
+    return rerender();
+  }
   if (action === 'sync-now') {
     toast('Completando…');
     await syncSpecies();
@@ -1203,6 +1288,13 @@ $app.addEventListener('change', async (e) => {
     data.settings = { ...data.settings, hour: h, minute: m };
     persist();
     toast(`Aviso a las ${pad(h)}:${pad(m)}`);
+  }
+  if (t.id === 's-gkey') {
+    data.keys.gemini = t.value.trim();
+    data.keys.geminiModel = '';
+    persist({ resched: false });
+    toast(data.keys.gemini ? 'Clave guardada' : 'Clave borrada');
+    if (data.keys.gemini) syncAiCare();
   }
   if (t.id === 's-key') {
     data.keys.plantnet = t.value.trim();

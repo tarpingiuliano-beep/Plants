@@ -22,3 +22,14 @@ test('al mejorar la base, las plantas automáticas se actualizan y las manuales 
   assert.equal(data.species['Impatiens hawkeri'].wiki, 'ficha');
   assert.equal(r.changed, 1);
 });
+
+test('lo consultado a la IA no se pisa con la tabla', () => {
+  const ai = { ...lookup('x'), days: 2, source: 'IA' };
+  const data = {
+    species: { 'Foo bar': { sci: 'Foo bar', names: [], care: ai } },
+    plants: [{ id: 'a', sci: 'Foo bar', auto: true, baseDays: 2 }],
+  };
+  const r = refreshCare(data, lookup);
+  assert.equal(data.species['Foo bar'].care.source, 'IA');
+  assert.equal(r.plants[0].baseDays, 2);
+});

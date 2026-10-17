@@ -6,7 +6,7 @@ const defaults = () => ({
   nextNid: 1,
   place: null, // { name, lat, lon }
   climate: null, // resumen del pronóstico (ver summarizeClimate)
-  keys: { plantnet: '' }, // se guarda solo en el celular, nunca en el repo
+  keys: { plantnet: '', gemini: '', geminiModel: '' }, // se guarda solo en el celular, nunca en el repo
   lastBackup: null, // ISO del último respaldo guardado
   species: {}, // base offline: { [nombre científico]: { sci, names, care, wiki, wikiTried, addedAt } }
 });
