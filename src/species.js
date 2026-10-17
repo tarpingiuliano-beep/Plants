@@ -15,7 +15,7 @@ export const PLACEMENTS = [
   { id: 'interior-poca', label: 'Interior, poca luz', icon: '🛋️', light: 1, outdoor: false, dry: 1.25 },
   { id: 'interior-luz', label: 'Interior luminoso (ventana)', icon: '🪟', light: 2.5, outdoor: false, dry: 1 },
   { id: 'balcon', label: 'Balcón o patio techado', icon: '🌤️', light: 3.5, outdoor: true, dry: 0.85 },
-  { id: 'jardin', label: 'Afuera, a pleno sol', icon: '☀️', light: 4, outdoor: true, dry: 0.75 },
+  { id: 'jardin', label: 'Afuera, a pleno sol', icon: '☀️', light: 4, outdoor: true, dry: 0.75, rain: true },
 ];
 
 export const placementOf = (id) => PLACEMENTS.find((p) => p.id === id) || PLACEMENTS[1];

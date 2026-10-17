@@ -570,3 +570,12 @@ input[type='password'] {
   margin-top: 1px;
   flex: none;
 }
+
+.steps {
+  margin: 0 0 10px;
+  padding-left: 20px;
+  font-size: 0.92rem;
+}
+.steps li {
+  margin-bottom: 6px;
+}

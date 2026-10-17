@@ -26,7 +26,40 @@ export function daysBetween(a, b) {
 }
 
 export function nextDue(plant) {
+  // Plantas en modo automático: fecha calculada día por día con el pronóstico (válida solo para este último riego)
+  if (plant.auto && plant.projDue && plant.projFor === plant.lastWatered) return plant.projDue;
   return addDays(plant.lastWatered, plant.everyDays);
+}
+
+/**
+ * Cuándo toca regar, simulando día por día: cada día "gasta" una fracción de agua que depende de la temperatura
+ * de ese día (pronóstico); la lluvia fuerte cuenta como riego en plantas de afuera. Más allá del pronóstico se
+ * usa la temperatura media. Con clima constante da lo mismo que adjustedDays.
+ */
+export function projectDue(plant, placement, climate) {
+  const fallback = addDays(plant.lastWatered, plant.everyDays);
+  if (!plant.baseDays || !climate?.days) return fallback;
+  const byDate = new Map(climate.days.map((d) => [d.date, d]));
+  const dry = placement.dry ?? 1;
+  let thirst = 0;
+  for (let k = 1; k <= 60; k++) {
+    const day = addDays(plant.lastWatered, k);
+    const d = byDate.get(day);
+    const t = d ? (d.max + d.min) / 2 : climate.avgTemp;
+    const tf = Number.isFinite(t) ? tempFactor(t) : 1;
+    const f = placement.outdoor ? tf : 1 + (tf - 1) * 0.5;
+    if (placement.rain && d) {
+      if (d.rain >= 8) {
+        thirst = 0; // llovió bien: es como si la hubieran regado
+        continue;
+      }
+      if (d.rain >= 3) thirst = Math.max(0, thirst - 0.5);
+    }
+    const c = 1 / Math.max(1, plant.baseDays * f * dry);
+    thirst += c;
+    if (thirst >= 1 - c / 2) return day;
+  }
+  return addDays(plant.lastWatered, 60);
 }
 
 /**
@@ -167,7 +200,8 @@ export function adjustedDays(baseDays, placement, avgTemp) {
 export function summarizeClimate(days, now = Date.now()) {
   const valid = days.filter((d) => Number.isFinite(d.max) && Number.isFinite(d.min));
   if (!valid.length) return null;
-  const avgTemp = valid.reduce((a, d) => a + (d.max + d.min) / 2, 0) / valid.length;
+  const week = valid.slice(0, 7);
+  const avgTemp = week.reduce((a, d) => a + (d.max + d.min) / 2, 0) / week.length;
   const next3 = valid.slice(0, 3);
   const coldest = next3.reduce((m, d) => (d.min < m.min ? d : m), next3[0]);
   return {
@@ -196,7 +230,7 @@ export const COLD_ALERT_FROM = 4; // °C: desde acá avisamos
 export function buildColdAlerts(plants, climate, getCare, placementLookup, now = new Date()) {
   if (!climate?.days) return [];
   const out = [];
-  climate.days.slice(0, 3).forEach((d, i) => {
+  climate.days.slice(0, 7).forEach((d, i) => {
     if (d.min > COLD_ALERT_FROM) return;
     const risk = plantsAtColdRisk(plants, d.min, getCare, placementLookup);
     if (!risk.length) return;
@@ -207,6 +241,37 @@ export function buildColdAlerts(plants, climate, getCare, placementLookup, now =
       plantId: risk[0].id,
       title: d.min <= 0 ? '❄️ Helada esta noche' : '🥶 Noche fría',
       body: `Mínima de ${Math.round(d.min)} °C. Entrá o cubrí: ${risk.map((p) => p.name).join(', ')}`,
+      at,
+    });
+  });
+  return out;
+}
+
+export const HEAT_ALERT_FROM = 35; // °C de máxima: valor por defecto si no sabemos qué aguanta la especie
+
+/** Plantas de afuera a las que les puede hacer mal una máxima de `max` grados. */
+export function plantsAtHeatRisk(plants, max, getCare, placementLookup) {
+  return plants.filter((p) => {
+    if (!placementLookup(p.placement).outdoor) return false;
+    const limit = getCare(p)?.maxTemp ?? HEAT_ALERT_FROM;
+    return max >= limit;
+  });
+}
+
+/** Aviso a las 8:00 de cada día de calor fuerte de los próximos 7 días (plantas de afuera). Ids 900101+. */
+export function buildHeatAlerts(plants, climate, getCare, placementLookup, now = new Date()) {
+  if (!climate?.days) return [];
+  const out = [];
+  climate.days.slice(0, 7).forEach((d, i) => {
+    const risk = plantsAtHeatRisk(plants, d.max, getCare, placementLookup);
+    if (!risk.length) return;
+    const at = atTime(d.date, 8, 0);
+    if (at <= now) return;
+    out.push({
+      id: 900101 + i,
+      plantId: risk[0].id,
+      title: '🥵 Calor fuerte hoy',
+      body: `Máxima de ${Math.round(d.max)} °C. Revisá la humedad y dales sombra: ${risk.map((p) => p.name).join(', ')}`,
       at,
     });
   });

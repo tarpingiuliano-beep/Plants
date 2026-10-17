@@ -33,12 +33,13 @@ Respondé SOLO con un JSON con esta forma:
   "riego_dias": número entero,
   "luz": número del 1 al 4,
   "temp_minima_c": número,
+  "temp_maxima_c": número,
   "humedad": "baja" | "media" | "alta",
   "apta_exterior": true | false,
   "consejos": ["hasta 3 consejos cortos y concretos"],
   "seguridad": "alta" | "media" | "baja"
 }
-Reglas: "riego_dias" es cada cuántos días regar una planta de esta especie en una maceta con drenaje, en un interior luminoso a unos 22 °C (el ajuste por estación y clima lo hace mi app, no lo incluyas). Si la especie necesita la tierra siempre húmeda, el número debe ser chico (2 a 4). "luz": 1 tolera poca luz, 2 luz brillante sin sol directo, 3 mucha luz con algo de sol, 4 sol directo. "temp_minima_c" es la temperatura más baja que aguanta sin daño. Si no conocés bien la especie, ponelo en "seguridad": "baja" y no inventes.`;
+Reglas: "riego_dias" es cada cuántos días regar una planta de esta especie en una maceta con drenaje, en un interior luminoso a unos 22 °C (el ajuste por estación y clima lo hace mi app, no lo incluyas). Si la especie necesita la tierra siempre húmeda, el número debe ser chico (2 a 4). "luz": 1 tolera poca luz, 2 luz brillante sin sol directo, 3 mucha luz con algo de sol, 4 sol directo. "temp_minima_c" es la temperatura más baja que aguanta sin daño y "temp_maxima_c" la más alta que aguanta a pleno aire libre antes de sufrir (por ejemplo, 38). Si no conocés bien la especie, ponelo en "seguridad": "baja" y no inventes.`;
 }
 
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
@@ -62,6 +63,7 @@ export function parseCare(text, sci, names = []) {
     days: clamp(days, 1, 45),
     light: clamp(light, 1, 4),
     minTemp: clamp(Math.round(minTemp), -20, 20),
+    maxTemp: Number.isFinite(Number(j.temp_maxima_c)) && j.temp_maxima_c !== null ? clamp(Math.round(Number(j.temp_maxima_c)), 20, 50) : undefined,
     humidity: HUMIDITY.includes(j.humedad) ? j.humedad : 'media',
     outdoorOk: j.apta_exterior === true,
     tips: (Array.isArray(j.consejos) ? j.consejos : []).map((x) => String(x).trim().slice(0, 160)).filter(Boolean).slice(0, 3),

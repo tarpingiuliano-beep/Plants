@@ -103,3 +103,22 @@ export async function sendTest() {
     return false;
   }
 }
+
+/** Android 12+: ¿puede la app disparar avisos a la hora exacta? 'granted' | 'denied' | 'unsupported' */
+export async function exactAlarmState() {
+  if (!isNative()) return 'unsupported';
+  try {
+    return (await LocalNotifications.checkExactNotificationSetting()).exact_alarm;
+  } catch {
+    return 'unsupported';
+  }
+}
+
+/** Abre la pantalla de Android donde se permiten "Alarmas y recordatorios". */
+export async function openExactAlarmSettings() {
+  try {
+    await LocalNotifications.changeExactNotificationSetting();
+  } catch {
+    /* no aplica */
+  }
+}

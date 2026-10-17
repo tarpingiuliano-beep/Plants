@@ -29,6 +29,8 @@ test('valida la respuesta y limita valores absurdos', () => {
   assert.equal(c.source, 'IA');
   assert.equal(c.tips.length, 3);
   assert.equal(c.outdoorOk, true);
+  assert.equal(c.maxTemp, undefined);
+  assert.equal(parseCare('{"riego_dias":3,"luz":2,"temp_minima_c":5,"temp_maxima_c":38}', 'x').maxTemp, 38);
   assert.equal(parseCare('{"riego_dias":900,"luz":9,"temp_minima_c":-90}', 'x').days, 45);
   assert.equal(parseCare('{"riego_dias":900,"luz":9,"temp_minima_c":-90}', 'x').light, 4);
   assert.equal(parseCare('{"riego_dias":900,"luz":9,"temp_minima_c":-90}', 'x').minTemp, -20);

@@ -20,6 +20,9 @@ import {
   addNote,
   adjustedDays,
   buildColdAlerts,
+  buildHeatAlerts,
+  plantsAtHeatRisk,
+  projectDue,
   plantsAtColdRisk,
   COLD_ALERT_FROM,
 } from './logic.js';
@@ -33,10 +36,13 @@ import {
   reschedule,
   onNotificationTap,
   sendTest,
+  exactAlarmState,
+  openExactAlarmSettings,
 } from './notifications.js';
 
 let data = load();
 let perm = 'unsupported';
+let exactAlarm = 'unsupported';
 let draft = null; // borrador del formulario de planta
 let cityResults = [];
 let cityMsg = '';
@@ -58,6 +64,13 @@ const fmtDay = (s) => {
 };
 const fmtWhen = (iso) =>
   new Date(iso).toLocaleString('es-AR', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+const ago = (ms) => {
+  const m = Math.max(0, Math.round((Date.now() - ms) / 60000));
+  if (m < 2) return 'recién';
+  if (m < 90) return `hace ${m} min`;
+  const h = Math.round(m / 60);
+  return h < 48 ? `hace ${h} h` : `hace ${Math.round(h / 24)} días`;
+};
 const online = () => navigator.onLine !== false;
 
 let toastTimer;
@@ -84,9 +97,14 @@ const getPlant = (id) => data.plants.find((p) => p.id === id);
 const careOf = (p) => (p.sci ? data.species[p.sci]?.care || lookup(p.sci, p.genus, p.family) : null);
 
 /** Avisos de helada/frío para las notificaciones */
-const extraAlerts = () => [...buildColdAlerts(data.plants, data.climate, careOf, placementOf), ...buildTaskSchedule(data.plants)];
+const extraAlerts = () => [
+  ...buildColdAlerts(data.plants, data.climate, careOf, placementOf),
+  ...buildHeatAlerts(data.plants, data.climate, careOf, placementOf),
+  ...buildTaskSchedule(data.plants),
+];
 
 function persist({ resched = true } = {}) {
+  applyClimate();
   if (!save(data)) toast('⚠️ No hay espacio para guardar. Probá con fotos más chicas.');
   if (resched) reschedule(data.plants, data.settings, extraAlerts());
 }
@@ -127,9 +145,16 @@ function fileToDataURL(file) {
 /** Recalcula la frecuencia de las plantas en modo automático */
 function applyClimate() {
   const t = data.climate?.avgTemp;
-  data.plants = data.plants.map((p) =>
-    p.auto && p.baseDays ? { ...p, everyDays: adjustedDays(p.baseDays, placementOf(p.placement), t) } : p,
-  );
+  data.plants = data.plants.map((p) => {
+    if (!(p.auto && p.baseDays)) return p;
+    const pl = placementOf(p.placement);
+    return {
+      ...p,
+      everyDays: adjustedDays(p.baseDays, pl, t),
+      projDue: projectDue(p, pl, data.climate),
+      projFor: p.lastWatered,
+    };
+  });
 }
 
 async function refreshClimate(force = false) {
@@ -395,6 +420,12 @@ function viewList() {
           (mínima ${Math.round(worst.min)} °C). Entrá o cubrí: <b>${risk.map((p) => esc(p.name)).join(', ')}</b></span></div>`);
       }
     }
+    const hot = c.days.slice(0, 2).find((d) => plantsAtHeatRisk(data.plants, d.max, careOf, placementOf).length);
+    if (hot) {
+      const risk = plantsAtHeatRisk(data.plants, hot.max, careOf, placementOf);
+      banners.push(`<div class="banner cold"><span>🥵 Calor fuerte el ${fmtDay(hot.date)} (máxima ${Math.round(hot.max)} °C).
+        Revisá la humedad y dales sombra: <b>${risk.map((p) => esc(p.name)).join(', ')}</b></span></div>`);
+    }
     if (c.rainToday >= 5) {
       const wet = plants.filter((p) => placementOf(p.placement).outdoor && waterStatus(p, today).days <= 0);
       if (wet.length) {
@@ -640,6 +671,7 @@ function viewSettings() {
           ? `${esc(data.place.name)}${c ? ` · ${Math.round(c.avgTemp)} °C de media, mínima de ${Math.round(c.minNext3)} °C en 3 días` : ''}`
           : 'Todavía no elegiste. La uso para ajustar el riego al clima y avisarte de heladas.'
       }</p>
+      ${c ? `<p class="hint" style="margin: 0 0 10px">Pronóstico de ${c.days.length} días actualizado ${ago(c.fetchedAt)}. Lo uso para calcular cada riego día por día.</p>` : ''}
       <button class="btn secondary block" data-action="use-gps">Usar mi ubicación actual</button>
       <div class="row" style="margin-top: 10px">
         <input type="text" id="city-q" placeholder="O buscá tu ciudad" maxlength="60" />
@@ -679,6 +711,23 @@ function viewSettings() {
         ${native && perm !== 'granted' ? '<button class="btn block" data-action="ask-perm">Activar notificaciones</button>' : ''}
         ${native && perm === 'granted' ? '<button class="btn secondary block" data-action="test-notif">Probar notificación (5 s)</button>' : ''}
       </div>
+    </div>
+
+    <div class="card" style="padding: 16px; margin-top: 12px">
+      <b>🔋 Para que los avisos nunca fallen</b>
+      <p class="sub" style="margin: 4px 0 8px">Los avisos los dispara el sistema aunque la app esté cerrada. Pero Samsung a veces “duerme” las apps que no usás y eso puede frenarlos. Se arregla una sola vez:</p>
+      <ol class="steps">
+        <li>Mantené apretado el ícono de <b>Plantas</b> → <b>Información de la app</b> → <b>Batería</b> → elegí <b>Sin restricciones</b>.</li>
+        <li>Abrí <b>Ajustes del celu → Cuidado del dispositivo → Batería → Límites de uso en segundo plano</b>. Si Plantas está en “Apps en suspensión”, sacala. Y apagá “Poner en suspensión las apps que no uso”.</li>
+        <li>En <b>Información de la app → Notificaciones</b>, dejá todo activado.</li>
+      </ol>
+      ${
+        native && exactAlarm !== 'unsupported'
+          ? exactAlarm === 'granted'
+            ? '<p class="status">✅ Avisos a la hora exacta: permitido.</p>'
+            : '<p class="status warn">Android todavía no me deja avisar a la hora exacta: puede demorar los avisos varios minutos.</p><button class="btn block" style="margin-top: 8px" data-action="exact-alarm">Permitir “Alarmas y recordatorios”</button>'
+          : ''
+      }
     </div>
 
     <div class="card" style="padding: 16px; margin-top: 12px">
@@ -1173,6 +1222,10 @@ $app.addEventListener('click', async (e) => {
     gMsg = `Google respondió error ${r.status}${r.msg ? `: ${r.msg}` : ''}.`;
     return rerender();
   }
+  if (action === 'exact-alarm') {
+    await openExactAlarmSettings();
+    return toast('Activá “Permitir alarmas y recordatorios” y volvé a la app.');
+  }
   if (action === 'sync-now') {
     toast('Completando…');
     await syncSpecies();
@@ -1310,12 +1363,23 @@ $app.addEventListener('submit', (e) => {
 });
 
 window.addEventListener('online', () => syncOnline());
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) return;
+  exactAlarmState().then((v) => {
+    if (v !== exactAlarm) {
+      exactAlarm = v;
+      if (routeName() === 'ajustes') render();
+    }
+  });
+  syncOnline();
+});
 
 /* ---------- arranque ---------- */
 
 (async function init() {
   await setupChannel();
   perm = await permissionState();
+  exactAlarm = await exactAlarmState();
   onNotificationTap((plantId) => {
     if (getPlant(plantId)) go(`/p/${plantId}`);
   });

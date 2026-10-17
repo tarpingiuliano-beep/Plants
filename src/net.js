@@ -6,7 +6,7 @@ export async function fetchClimate({ lat, lon }) {
   const url =
     'https://api.open-meteo.com/v1/forecast' +
     `?latitude=${lat}&longitude=${lon}` +
-    '&daily=temperature_2m_max,temperature_2m_min,precipitation_sum&timezone=auto&forecast_days=7';
+    '&daily=temperature_2m_max,temperature_2m_min,precipitation_sum&timezone=auto&forecast_days=16';
   const r = await fetch(url);
   if (!r.ok) throw new Error(`Clima: error ${r.status}`);
   const j = await r.json();

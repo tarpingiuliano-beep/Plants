@@ -178,3 +178,72 @@ test('Impatiens hawkeri: riego frecuente (antes caía en el genérico de ~7 día
   // en interior luminoso con 22 °C no se alarga
   assert.ok(adjustedDays(3, placementOf('interior-luz'), 22) <= 3);
 });
+
+import { projectDue, buildHeatAlerts, nextDue } from '../src/logic.js';
+
+const flat = (t, n = 16, rain = 0, start = '2026-10-15') => ({
+  avgTemp: t,
+  days: Array.from({ length: n }, (_, i) => {
+    const d = new Date(2026, 9, 15 + i);
+    return { date: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`, max: t + 4, min: t - 4, rain };
+  }),
+});
+
+test('pronóstico día por día: con clima constante coincide con el intervalo ajustado', () => {
+  for (const pl of PLACEMENTS) {
+    for (const [base, t] of [[8, 22], [8, 12], [3, 28], [18, 5], [5, 33]]) {
+      const plant = { lastWatered: '2026-10-14', baseDays: base, everyDays: adjustedDays(base, pl, t) };
+      const due = projectDue(plant, pl, flat(t, 40));
+      const days = Math.round((new Date(due) - new Date('2026-10-14')) / 86400000);
+      assert.ok(Math.abs(days - plant.everyDays) <= 1, `${pl.id} base ${base} t ${t}: ${days} vs ${plant.everyDays}`);
+    }
+  }
+});
+
+test('una ola de calor adelanta el riego y el frío lo atrasa', () => {
+  const pl = placementOf('jardin');
+  const plant = { lastWatered: '2026-10-15', baseDays: 6, everyDays: 6 };
+  const normal = projectDue(plant, pl, flat(22, 16));
+  const hot = flat(22, 16);
+  hot.days.forEach((d, i) => { if (i >= 1 && i <= 5) { d.max = 38; d.min = 26; } });
+  const cold = flat(22, 16);
+  cold.days.forEach((d, i) => { if (i >= 1 && i <= 5) { d.max = 8; d.min = 1; } });
+  assert.ok(projectDue(plant, pl, hot) < normal);
+  assert.ok(projectDue(plant, pl, cold) > normal);
+});
+
+test('lluvia fuerte cuenta como riego solo afuera a cielo abierto', () => {
+  const plant = { lastWatered: '2026-10-15', baseDays: 6, everyDays: 6 };
+  const rainy = flat(22, 16);
+  rainy.days[3].rain = 20;
+  const dryDue = projectDue(plant, placementOf('jardin'), flat(22, 16));
+  assert.ok(projectDue(plant, placementOf('jardin'), rainy) > dryDue);
+  assert.equal(projectDue(plant, placementOf('interior-luz'), rainy), projectDue(plant, placementOf('interior-luz'), flat(22, 16)));
+  assert.equal(projectDue(plant, placementOf('balcon'), rainy), projectDue(plant, placementOf('balcon'), flat(22, 16)));
+});
+
+test('nextDue usa la proyección solo si es del último riego', () => {
+  const p = { auto: true, lastWatered: '2026-10-15', everyDays: 5, projDue: '2026-10-18', projFor: '2026-10-15' };
+  assert.equal(nextDue(p), '2026-10-18');
+  assert.equal(nextDue({ ...p, lastWatered: '2026-10-16' }), '2026-10-21');
+  assert.equal(nextDue({ ...p, auto: false }), '2026-10-20');
+});
+
+test('alertas de calor: solo afuera, con umbral por especie', () => {
+  const climate = flat(30, 7);
+  climate.days[2].max = 38;
+  climate.days[3].max = 34;
+  const plants = [
+    { id: 'a', name: 'Tomate', placement: 'jardin' },
+    { id: 'b', name: 'Helecho', placement: 'jardin' },
+    { id: 'c', name: 'Monstera', placement: 'interior-luz' },
+  ];
+  const care = { a: {}, b: { maxTemp: 33 }, c: { maxTemp: 20 } };
+  const out = buildHeatAlerts(plants, climate, (p) => care[p.id], placementOf, new Date(2026, 9, 15, 7, 0));
+  const byId = Object.fromEntries(out.map((o) => [o.id, o]));
+  assert.match(byId[900103].body, /Tomate, Helecho/);
+  assert.match(byId[900104].body, /Helecho/);
+  assert.doesNotMatch(byId[900104].body, /Tomate/);
+  assert.ok(out.every((o) => !/Monstera/.test(o.body)));
+  assert.equal(byId[900103].at.getHours(), 8);
+});
