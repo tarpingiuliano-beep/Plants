@@ -247,3 +247,67 @@ test('alertas de calor: solo afuera, con umbral por especie', () => {
   assert.ok(out.every((o) => !/Monstera/.test(o.body)));
   assert.equal(byId[900103].at.getHours(), 8);
 });
+
+import { calibrate, tagLastWatering, waterPlant } from '../src/logic.js';
+
+test('calibración: aprende de la tierra, con límites y sin tocar nada si "se veía mal"', () => {
+  let p = { calib: 1, calibN: 0 };
+  // tierra húmeda a tiempo: necesita más días entre riegos
+  const a = calibrate(p, 'humeda', 0);
+  assert.equal(a.calib, 1.12);
+  assert.equal(a.calibN, 1);
+  // tierra seca a tiempo: menos días
+  assert.equal(calibrate(p, 'seca', 0).calib, 0.88);
+  // lo esperable casi no mueve nada
+  assert.equal(calibrate(p, 'humeda', -3).calib, 1.05); // la regó antes de tiempo
+  assert.equal(calibrate(p, 'seca', 3).calib, 0.95); // la regó tarde
+  // lo contrario sí pesa más
+  assert.equal(calibrate(p, 'seca', -3).calib, 0.8);
+  assert.equal(calibrate(p, 'humeda', 3).calib, 1.2);
+  // justa suma experiencia pero no cambia el ritmo
+  assert.deepEqual(calibrate({ calib: 1.3, calibN: 2 }, 'justa', 0), { calib: 1.3, calibN: 3 });
+  // "se veía mal" no calibra
+  assert.deepEqual(calibrate({ calib: 1.3, calibN: 2 }, 'mal', -4), { calib: 1.3, calibN: 2 });
+  // límites
+  let q = { calib: 1.75, calibN: 9 };
+  assert.equal(calibrate(q, 'humeda', 3).calib, 1.8);
+  q = { calib: 0.52, calibN: 9 };
+  assert.equal(calibrate(q, 'seca', -3).calib, 0.5);
+});
+
+test('el riego guarda cómo estaba la tierra', () => {
+  const p = waterPlant({ history: [], lastWatered: '2026-10-01' }, new Date(2026, 9, 25, 10));
+  const t = tagLastWatering(p, 'seca');
+  assert.equal(t.history[0].soil, 'seca');
+  assert.equal(tagLastWatering({ history: [{ type: 'nota' }] }, 'seca').history[0].soil, undefined);
+});
+
+import { buildStormAlerts, stormOf } from '../src/logic.js';
+
+test('tormentas: granizo, tormenta y viento, con aviso la noche anterior', () => {
+  assert.equal(stormOf({ code: 96 }), 'granizo');
+  assert.equal(stormOf({ code: 95 }), 'tormenta');
+  assert.equal(stormOf({ code: 3, gust: 72 }), 'viento');
+  assert.equal(stormOf({ code: 3, gust: 40 }), null);
+  const climate = flat(24, 7);
+  climate.days[2].code = 96;
+  climate.days[2].gust = 70;
+  climate.days[4].gust = 65;
+  const plants = [
+    { id: 'a', name: 'Tomate', placement: 'jardin' },
+    { id: 'b', name: 'Monstera', placement: 'interior-luz' },
+  ];
+  const now = new Date(2026, 9, 15, 10, 0);
+  const out = buildStormAlerts(plants, climate, placementOf, now);
+  const byId = Object.fromEntries(out.map((o) => [o.id, o]));
+  assert.match(byId[900205].title, /granizo mañana/i); // día 2: aviso a las 20:00 del día 1
+  assert.equal(byId[900205].at.getHours(), 20);
+  assert.match(byId[900206].title, /granizo hoy/i);
+  assert.equal(byId[900206].at.getHours(), 8);
+  assert.match(byId[900206].body, /70 km\/h/);
+  assert.match(byId[900206].body, /Tomate/);
+  assert.doesNotMatch(byId[900206].body, /Monstera/);
+  assert.match(byId[900209].title, /Viento fuerte mañana/);
+  assert.equal(new Set(out.map((o) => o.id)).size, out.length);
+  assert.deepEqual(buildStormAlerts([plants[1]], climate, placementOf, now), []);
+});

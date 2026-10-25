@@ -579,3 +579,35 @@ input[type='password'] {
 .steps li {
   margin-bottom: 6px;
 }
+
+.sheet {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 20;
+  padding: 0 12px calc(var(--safe-bottom) + 12px);
+  pointer-events: none;
+}
+.sheet-body {
+  max-width: 616px;
+  margin: 0 auto;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: 0 -4px 24px rgba(0, 0, 0, 0.18);
+  padding: 14px;
+  pointer-events: auto;
+}
+.sheet-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.sheet-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}

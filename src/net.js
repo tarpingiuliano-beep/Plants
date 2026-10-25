@@ -6,7 +6,7 @@ export async function fetchClimate({ lat, lon }) {
   const url =
     'https://api.open-meteo.com/v1/forecast' +
     `?latitude=${lat}&longitude=${lon}` +
-    '&daily=temperature_2m_max,temperature_2m_min,precipitation_sum&timezone=auto&forecast_days=16';
+    '&daily=temperature_2m_max,temperature_2m_min,precipitation_sum,weather_code,wind_gusts_10m_max&timezone=auto&forecast_days=16';
   const r = await fetch(url);
   if (!r.ok) throw new Error(`Clima: error ${r.status}`);
   const j = await r.json();
@@ -17,6 +17,8 @@ export async function fetchClimate({ lat, lon }) {
     max: d.temperature_2m_max[i],
     min: d.temperature_2m_min[i],
     rain: d.precipitation_sum[i],
+    code: d.weather_code?.[i],
+    gust: d.wind_gusts_10m_max?.[i],
   }));
   const s = summarizeClimate(days);
   if (!s) throw new Error('Clima: sin datos');

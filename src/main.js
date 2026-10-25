@@ -1,7 +1,7 @@
 import './styles.css';
 import { Camera, CameraResultType, CameraSource } from '@capacitor/camera';
 import { Geolocation } from '@capacitor/geolocation';
-import { load, save } from './store.js';
+import { defaultState, loadAsync, save, flushNow, setSaveErrorHandler } from './store.js';
 import { buildBackup, backupFileName, parseBackup, summarize, replaceWith, mergeWith, needsBackupReminder, lastBackupText } from './backup.js';
 import { refreshCare } from './migrate.js';
 import { askCare, testGeminiKey } from './ai.js';
@@ -11,6 +11,7 @@ import {
 } from './novedad.js';
 import {
   dateStr,
+  daysBetween,
   nextDue,
   waterStatus,
   statusText,
@@ -20,7 +21,12 @@ import {
   addNote,
   adjustedDays,
   buildColdAlerts,
+  calibrate,
+  tagLastWatering,
+  SOIL,
   buildHeatAlerts,
+  buildStormAlerts,
+  stormOf,
   plantsAtHeatRisk,
   projectDue,
   plantsAtColdRisk,
@@ -40,7 +46,7 @@ import {
   openExactAlarmSettings,
 } from './notifications.js';
 
-let data = load();
+let data = defaultState();
 let perm = 'unsupported';
 let exactAlarm = 'unsupported';
 let draft = null; // borrador del formulario de planta
@@ -100,6 +106,7 @@ const careOf = (p) => (p.sci ? data.species[p.sci]?.care || lookup(p.sci, p.genu
 const extraAlerts = () => [
   ...buildColdAlerts(data.plants, data.climate, careOf, placementOf),
   ...buildHeatAlerts(data.plants, data.climate, careOf, placementOf),
+  ...buildStormAlerts(data.plants, data.climate, placementOf),
   ...buildTaskSchedule(data.plants),
 ];
 
@@ -148,10 +155,11 @@ function applyClimate() {
   data.plants = data.plants.map((p) => {
     if (!(p.auto && p.baseDays)) return p;
     const pl = placementOf(p.placement);
+    const eff = { ...p, baseDays: p.baseDays * (p.calib || 1) }; // lo aprendido de esta planta
     return {
       ...p,
-      everyDays: adjustedDays(p.baseDays, pl, t),
-      projDue: projectDue(p, pl, data.climate),
+      everyDays: adjustedDays(eff.baseDays, pl, t),
+      projDue: projectDue(eff, pl, data.climate),
       projFor: p.lastWatered,
     };
   });
@@ -426,6 +434,13 @@ function viewList() {
       banners.push(`<div class="banner cold"><span>🥵 Calor fuerte el ${fmtDay(hot.date)} (máxima ${Math.round(hot.max)} °C).
         Revisá la humedad y dales sombra: <b>${risk.map((p) => esc(p.name)).join(', ')}</b></span></div>`);
     }
+    const stormDay = c.days.slice(0, 2).find((d) => stormOf(d));
+    const outside = data.plants.filter((p) => placementOf(p.placement).outdoor);
+    if (stormDay && outside.length) {
+      const what = { granizo: 'tormenta con posible granizo', tormenta: 'tormenta', viento: 'viento fuerte' }[stormOf(stormDay)];
+      banners.push(`<div class="banner cold"><span>⛈️ ${fmtDay(stormDay.date)}: ${what}. Entrá o resguardá:
+        <b>${outside.map((p) => esc(p.name)).join(', ')}</b></span></div>`);
+    }
     if (c.rainToday >= 5) {
       const wet = plants.filter((p) => placementOf(p.placement).outdoor && waterStatus(p, today).days <= 0);
       if (wet.length) {
@@ -508,7 +523,7 @@ function viewDetail(p) {
         <div class="when">${fmtWhen(h.at)}</div></div></li>`;
     }
     return `<li><span>${h.type === 'riego' ? '💧' : '📝'}</span>
-      <div><div>${h.type === 'riego' ? 'Riego' : esc(h.note)}${h.type === 'riego' && h.note ? ` — ${esc(h.note)}` : ''}</div>
+      <div><div>${h.type === 'riego' ? `Riego${h.soil ? ` — ${esc(SOIL[h.soil] || '')}` : ''}` : esc(h.note)}${h.type === 'riego' && h.note ? ` — ${esc(h.note)}` : ''}</div>
       <div class="when">${fmtWhen(h.at)}</div></div></li>`;
   };
   const hist = p.history.length ? p.history.map(histItem).join('') : '<p class="sub">Todavía no hay registros.</p>';
@@ -546,7 +561,15 @@ function viewDetail(p) {
           <div class="fact"><span class="sub">Próximo riego</span><b>${fmtDay(nextDue(p))}</b></div>
           <div class="fact"><span class="sub">Aviso</span><b>${pad(data.settings.hour)}:${pad(data.settings.minute)}</b></div>
         </div>
-        <button class="btn blue block" data-action="water" data-id="${p.id}">💧 Ya la regué</button>
+        ${
+          p.calibN
+            ? `<p class="hint" style="margin: 10px 0 0">Aprendí el ritmo de esta planta en ${p.calibN} ${p.calibN === 1 ? 'riego' : 'riegos'}: ${
+                (p.calib || 1) > 1 ? 'necesita menos agua' : (p.calib || 1) < 1 ? 'necesita más agua' : 'va bien'
+              } que lo típico de su especie (×${(p.calib || 1).toFixed(2)}).
+              <button class="btn secondary" style="margin-left: 6px" data-action="calib-reset" data-id="${p.id}">Restablecer</button></p>`
+            : ''
+        }
+        <button class="btn blue block" style="margin-top: 10px" data-action="water" data-id="${p.id}">💧 Ya la regué</button>
         <button class="btn secondary block" style="margin-top: 8px" data-action="nov-start" data-id="${p.id}">🩺 Sumar novedad</button>
       </div>
     </div>
@@ -928,7 +951,7 @@ function render() {
   else html = viewList();
 
   const keepScroll = window.scrollY;
-  $app.innerHTML = html;
+  $app.innerHTML = html + soilSheet();
   if (['new', 'edit', 'ajustes', 'novedad'].includes(name) && window.__keepScroll) window.scrollTo(0, keepScroll);
   else window.scrollTo(0, 0);
   window.__keepScroll = false;
@@ -950,12 +973,54 @@ async function doAskPerm() {
   render();
 }
 
+let soilAsk = null; // { id, offset }: esperando que cuentes cómo estaba la tierra
+
 function doWater(id) {
-  if (!getPlant(id)) return;
+  const before = getPlant(id);
+  if (!before) return;
+  const offset = daysBetween(nextDue(before), dateStr());
   data.plants = data.plants.map((x) => (x.id === id ? waterPlant(x) : x));
   persist();
   toast(`💧 Anotado. Próximo riego: ${fmtDay(nextDue(getPlant(id)))}`);
+  soilAsk = before.auto && before.baseDays ? { id, offset } : null;
   render();
+}
+
+function answerSoil(v) {
+  const ask = soilAsk;
+  soilAsk = null;
+  const p = ask && getPlant(ask.id);
+  if (!p) return render();
+  data.plants = data.plants.map((x) => {
+    if (x.id !== p.id) return x;
+    const tagged = tagLastWatering(x, v);
+    return v === 'mal' ? tagged : { ...tagged, ...calibrate(tagged, v, ask.offset) };
+  });
+  persist();
+  if (v === 'mal') {
+    toast('Anotado. Sumá una novedad con fotos y te ayudo a ver qué le pasa.');
+    nov = newNov(p.id);
+    return go(`/novedad/${p.id}`);
+  }
+  const q = getPlant(p.id);
+  toast(v === 'justa' ? 'Perfecto, el ritmo está bien ✓' : `Ajusté el riego: ahora cada ${q.everyDays} días`);
+  render();
+}
+
+function soilSheet() {
+  if (!soilAsk || !getPlant(soilAsk.id)) return '';
+  const p = getPlant(soilAsk.id);
+  return `<div class="sheet"><div class="sheet-body">
+      <div class="sheet-head"><b>${esc(p.name)}: ¿cómo estaba la tierra?</b>
+        <button class="icon-btn" data-action="soil-skip" aria-label="Omitir">✕</button></div>
+      <div class="sheet-grid">
+        <button class="btn secondary" data-action="soil" data-v="humeda">💦 Todavía húmeda</button>
+        <button class="btn secondary" data-action="soil" data-v="justa">👌 Justa</button>
+        <button class="btn secondary" data-action="soil" data-v="seca">🏜️ Muy seca</button>
+        <button class="btn secondary" data-action="soil" data-v="mal">🥀 Se veía mal</button>
+      </div>
+      <p class="hint" style="margin: 8px 0 0">Con esto aprendo el ritmo real de esta planta en tu casa.</p>
+    </div></div>`;
 }
 
 async function setPlace(place) {
@@ -1123,6 +1188,17 @@ $app.addEventListener('click', async (e) => {
     return rerender();
   }
 
+  if (action === 'soil') return answerSoil(el.dataset.v);
+  if (action === 'soil-skip') {
+    soilAsk = null;
+    return render();
+  }
+  if (action === 'calib-reset') {
+    data.plants = data.plants.map((x) => (x.id === id ? { ...x, calib: 1, calibN: 0 } : x));
+    persist();
+    toast('Volví al ritmo original');
+    return render();
+  }
   if (action === 'nov-start') {
     nov = newNov(id);
     return go(`/novedad/${id}`);
@@ -1376,7 +1452,19 @@ document.addEventListener('visibilitychange', () => {
 
 /* ---------- arranque ---------- */
 
+setSaveErrorHandler(() => toast('⚠️ No pude guardar los cambios. Probá liberar espacio en el celular.'));
+window.addEventListener('pagehide', () => flushNow());
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) flushNow();
+});
+
 (async function init() {
+  data = await loadAsync();
+  try {
+    navigator.storage?.persist?.(); // pide que Android no borre los datos si falta espacio
+  } catch {
+    /* no pasa nada */
+  }
   await setupChannel();
   perm = await permissionState();
   exactAlarm = await exactAlarmState();

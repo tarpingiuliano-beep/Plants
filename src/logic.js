@@ -163,6 +163,40 @@ export function waterPlant(plant, when = new Date(), note = '') {
   };
 }
 
+export const CALIB_MIN = 0.5;
+export const CALIB_MAX = 1.8;
+export const SOIL = {
+  humeda: 'la tierra estaba todavía húmeda',
+  justa: 'la tierra estaba justa',
+  seca: 'la tierra estaba muy seca',
+  mal: 'la regué porque se veía mal',
+};
+
+/**
+ * Aprende de cómo estaba la tierra al regar. `offset` = días de atraso respecto de la fecha prevista
+ * (positivo = tarde, negativo = antes de tiempo). Un riego adelantado con la tierra húmeda, o uno tardío con la
+ * tierra seca, es lo esperable y casi no mueve nada; lo contrario sí. El ajuste queda entre ×0,5 y ×1,8.
+ * "Se veía mal" no calibra: una planta decaída puede tener sed o exceso de agua.
+ */
+export function calibrate(plant, soil, offset = 0) {
+  const cur = plant.calib || 1;
+  const n = plant.calibN || 0;
+  if (!['humeda', 'justa', 'seca'].includes(soil)) return { calib: cur, calibN: n };
+  let step = 0;
+  if (soil === 'humeda') step = offset <= -1 ? 0.05 : offset >= 2 ? 0.2 : 0.12;
+  if (soil === 'seca') step = offset >= 1 ? -0.05 : offset <= -2 ? -0.2 : -0.12;
+  const calib = Math.round(Math.max(CALIB_MIN, Math.min(CALIB_MAX, cur * (1 + step))) * 100) / 100;
+  return { calib, calibN: n + 1 };
+}
+
+/** Anota en el último riego cómo estaba la tierra. */
+export function tagLastWatering(plant, soil) {
+  const i = plant.history.findIndex((h) => h.type === 'riego');
+  if (i < 0) return plant;
+  const history = plant.history.map((h, k) => (k === i ? { ...h, soil } : h));
+  return { ...plant, history };
+}
+
 export function addNote(plant, note, when = new Date()) {
   return {
     ...plant,
@@ -211,7 +245,7 @@ export function summarizeClimate(days, now = Date.now()) {
     minDate: coldest.date,
     rainToday: valid[0].rain || 0,
     rainTomorrow: valid[1]?.rain || 0,
-    days: valid.map((d) => ({ date: d.date, max: d.max, min: d.min, rain: d.rain || 0 })),
+    days: valid.map((d) => ({ date: d.date, max: d.max, min: d.min, rain: d.rain || 0, code: d.code, gust: d.gust })),
   };
 }
 
@@ -274,6 +308,49 @@ export function buildHeatAlerts(plants, climate, getCare, placementLookup, now =
       body: `Máxima de ${Math.round(d.max)} °C. Revisá la humedad y dales sombra: ${risk.map((p) => p.name).join(', ')}`,
       at,
     });
+  });
+  return out;
+}
+
+export const GUST_ALERT_FROM = 60; // km/h
+
+/** Qué tormenta se espera un día: 'granizo' | 'tormenta' | 'viento' | null (códigos WMO de Open-Meteo). */
+export function stormOf(d) {
+  if (d.code === 96 || d.code === 99) return 'granizo';
+  if (d.code === 95) return 'tormenta';
+  if (Number.isFinite(d.gust) && d.gust >= GUST_ALERT_FROM) return 'viento';
+  return null;
+}
+
+const STORM_TEXT = {
+  granizo: ['⛈️ Posible granizo', 'tormenta con posible granizo'],
+  tormenta: ['⛈️ Tormenta', 'tormenta eléctrica'],
+  viento: ['💨 Viento fuerte', 'ráfagas fuertes'],
+};
+
+/**
+ * Avisos de tormenta para las plantas de afuera: a las 20:00 del día anterior (para dar tiempo a entrarlas)
+ * y a las 8:00 del mismo día. Próximos 5 días. Ids 900201+. El granizo es el pronóstico menos preciso: se avisa como "posible".
+ */
+export function buildStormAlerts(plants, climate, placementLookup, now = new Date()) {
+  if (!climate?.days) return [];
+  const outside = plants.filter((p) => placementLookup(p.placement).outdoor);
+  if (!outside.length) return [];
+  const names = outside.map((p) => p.name).join(', ');
+  const out = [];
+  climate.days.slice(0, 5).forEach((d, i) => {
+    const kind = stormOf(d);
+    if (!kind) return;
+    const [title, what] = STORM_TEXT[kind];
+    const gust = Number.isFinite(d.gust) && d.gust >= GUST_ALERT_FROM ? ` y ráfagas de ${Math.round(d.gust)} km/h` : '';
+    const prev = atTime(addDays(d.date, -1), 20, 0);
+    if (prev > now && i > 0) {
+      out.push({ id: 900201 + i * 2, plantId: outside[0].id, title: `${title} mañana`, body: `Se espera ${what}${gust}. Entrá o resguardá: ${names}`, at: prev });
+    }
+    const same = atTime(d.date, 8, 0);
+    if (same > now) {
+      out.push({ id: 900202 + i * 2, plantId: outside[0].id, title: `${title} hoy`, body: `Se espera ${what}${gust}. Entrá o resguardá: ${names}`, at: same });
+    }
   });
   return out;
 }
