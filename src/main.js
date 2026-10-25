@@ -4,13 +4,15 @@ import { Geolocation } from '@capacitor/geolocation';
 import { defaultState, loadAsync, save, flushNow, setSaveErrorHandler } from './store.js';
 import { buildBackup, backupFileName, parseBackup, summarize, replaceWith, mergeWith, needsBackupReminder, lastBackupText } from './backup.js';
 import { refreshCare } from './migrate.js';
-import { askCare, testGeminiKey } from './ai.js';
+import { askCare, askExtra, testGeminiKey } from './ai.js';
+import { MONTHS, eventsOf, eventsInMonth, digestText, buildMonthlyDigests, monthsText } from './extras.js';
 import { shareTextFile, copyText, sharePhotosWithText } from './files.js';
 import {
-  MAX_PHOTOS, buildPrompt, parseAnswer, tasksFromActions, completeTask, removeTask, taskState, taskText, dueTasks, buildTaskSchedule,
+  MAX_PHOTOS, makeTask, buildPrompt, parseAnswer, tasksFromActions, completeTask, removeTask, taskState, taskText, dueTasks, buildTaskSchedule,
 } from './novedad.js';
 import {
   dateStr,
+  addDays,
   daysBetween,
   nextDue,
   waterStatus,
@@ -100,6 +102,7 @@ const go = (path, replace = false) => {
 };
 
 const getPlant = (id) => data.plants.find((p) => p.id === id);
+const seasonOf = (p) => (p.sci ? data.species[p.sci]?.extra || null : null);
 const careOf = (p) => (p.sci ? data.species[p.sci]?.care || lookup(p.sci, p.genus, p.family) : null);
 
 /** Avisos de helada/frío para las notificaciones */
@@ -108,6 +111,7 @@ const extraAlerts = () => [
   ...buildHeatAlerts(data.plants, data.climate, careOf, placementOf),
   ...buildStormAlerts(data.plants, data.climate, placementOf),
   ...buildTaskSchedule(data.plants),
+  ...(data.settings.seasonAlerts === false ? [] : buildMonthlyDigests(data.plants, seasonOf)),
 ];
 
 function persist({ resched = true } = {}) {
@@ -197,7 +201,7 @@ async function syncSpecies() {
   }
 }
 
-/** Pide a Gemini los cuidados de las especies que mi tabla no conoce bien (una vez por especie). */
+/** Pide a Gemini (una vez por especie) los cuidados base y la ficha de temporada. */
 async function syncAiCare() {
   const key = data.keys.gemini;
   if (!key || !online() || aiBusy) return;
@@ -209,29 +213,42 @@ async function syncAiCare() {
       data.keys.geminiModel = t.model;
     }
     let changed = false;
-    for (const sp of Object.values(data.species)) {
-      if (['especie', 'IA'].includes(sp.care?.source)) continue;
-      if (sp.aiTried && Date.now() - sp.aiTried < 6 * 3600000) continue;
-      sp.aiTried = Date.now();
-      changed = true;
+    const recent = (t) => t && Date.now() - t < 6 * 3600000;
+    outer: for (const sp of Object.values(data.species)) {
       const plant = data.plants.find((p) => p.sci === sp.sci);
-      const r = await askCare(
-        { sci: sp.sci, commonName: sp.names?.[0], family: plant?.family, placement: placementOf(plant?.placement), place: data.place, climate: data.climate },
-        key,
-        data.keys.geminiModel,
-      );
-      if (r.care) {
-        sp.care = r.care;
-        data.plants = data.plants.map((p) => (p.sci === sp.sci && p.auto ? { ...p, baseDays: r.care.days } : p));
-      } else {
-        if (/ 404/.test(r.error || '')) data.keys.geminiModel = '';
-        if (r.quota) break;
+      if (!['especie', 'IA'].includes(sp.care?.source) && !recent(sp.aiTried)) {
+        sp.aiTried = Date.now();
+        changed = true;
+        const r = await askCare(
+          { sci: sp.sci, commonName: sp.names?.[0], family: plant?.family, placement: placementOf(plant?.placement), place: data.place, climate: data.climate },
+          key,
+          data.keys.geminiModel,
+        );
+        if (r.care) {
+          sp.care = r.care;
+          data.plants = data.plants.map((p) => (p.sci === sp.sci && p.auto ? { ...p, baseDays: r.care.days } : p));
+        } else {
+          if (/ 404/.test(r.error || '')) data.keys.geminiModel = '';
+          if (r.quota) break outer;
+        }
+      }
+      if ((!sp.extra || sp.extraStale) && !recent(sp.extraTried)) {
+        sp.extraTried = Date.now();
+        changed = true;
+        const r = await askExtra({ sci: sp.sci, commonName: sp.names?.[0], place: data.place, myFertilizer: data.settings.myFertilizer }, key, data.keys.geminiModel);
+        if (r.extra) {
+          sp.extra = r.extra;
+          sp.extraStale = false;
+        } else {
+          if (/ 404/.test(r.error || '')) data.keys.geminiModel = '';
+          if (r.quota) break outer;
+        }
       }
     }
     if (changed) {
       applyClimate();
       persist();
-      if (['p', 'ajustes', ''].includes(routeName())) render();
+      if (['p', 'ajustes', '', 'calendario'].includes(routeName())) render();
     }
   } finally {
     aiBusy = false;
@@ -417,6 +434,11 @@ function viewList() {
     banners.push(`<div class="banner"><span>📍 Elegí dónde vivís y ajusto el riego al clima de tu zona.</span>
       <button class="btn" data-action="settings">Elegir</button></div>`);
   }
+  const monthItems = data.settings.seasonAlerts === false ? [] : eventsInMonth(data.plants, seasonOf, thisMonth());
+  if (monthItems.length) {
+    banners.push(`<div class="banner"><span>🌿 Este mes: ${esc(digestText(monthItems))}</span>
+      <button class="btn" data-action="calendar">Ver</button></div>`);
+  }
   const c = data.climate;
   if (c) {
     const days = c.days.slice(0, 3).filter((d) => d.min <= COLD_ALERT_FROM);
@@ -471,7 +493,8 @@ function viewList() {
     <p>La reconozco y te digo cómo cuidarla.</p></div>`;
 
   return `<div class="topbar"><h1>Mis plantas</h1>
-      <button class="icon-btn" data-action="settings" aria-label="Ajustes">⚙️</button></div>
+      <div class="row" style="flex: none; gap: 4px"><button class="icon-btn" data-action="calendar" aria-label="Calendario">📅</button>
+      <button class="icon-btn" data-action="settings" aria-label="Ajustes">⚙️</button></div></div>
     ${data.place ? `<p class="sub" style="margin: -6px 0 12px">${weatherLine()}</p>` : ''}
     ${banners.join('')}
     ${plants.length ? cards : empty}
@@ -574,6 +597,7 @@ function viewDetail(p) {
       </div>
     </div>
     ${care ? `<div style="margin-top: 12px">${careCardHtml(care, placementOf(p.placement), { wiki: sp?.wiki })}</div>` : ''}
+    ${seasonCardHtml(p)}
     ${tasksHtml}
     <h2>Historial</h2>
     <div class="card" style="padding: 4px 16px"><ul class="history">${hist}</ul></div>
@@ -737,6 +761,15 @@ function viewSettings() {
     </div>
 
     <div class="card" style="padding: 16px; margin-top: 12px">
+      <b>🪱 Mi abono y avisos de temporada</b>
+      <label for="s-fert" style="margin-top: 10px">Abono que tengo en casa</label>
+      <input type="text" id="s-fert" value="${esc(data.settings.myFertilizer || '')}" maxlength="80" placeholder="Ej: humus de lombriz" />
+      <p class="hint">Se lo cuento a Gemini para que te diga cuánto y cada cuánto usarlo en cada planta. Si lo cambiás, actualizo las recomendaciones.</p>
+      <label class="check" style="margin-top: 10px"><input type="checkbox" id="s-season" ${data.settings.seasonAlerts === false ? '' : 'checked'} />
+        <span>Avisarme el día 1 de cada mes lo que toca (abonar, podar, esquejes, semillas…)</span></label>
+    </div>
+
+    <div class="card" style="padding: 16px; margin-top: 12px">
       <b>🔋 Para que los avisos nunca fallen</b>
       <p class="sub" style="margin: 4px 0 8px">Los avisos los dispara el sistema aunque la app esté cerrada. Pero Samsung a veces “duerme” las apps que no usás y eso puede frenarlos. Se arregla una sola vez:</p>
       <ol class="steps">
@@ -794,6 +827,89 @@ function viewSettings() {
     <p class="hint" style="text-align: center; margin-top: 18px">Plantas · build ${esc(__BUILD__)}</p>`;
 }
 
+
+
+/* ---------- cuidados de temporada y calendario ---------- */
+
+const thisMonth = () => new Date().getMonth() + 1;
+
+function seasonCardHtml(p) {
+  const ex = seasonOf(p);
+  if (!ex) {
+    if (!p.sci) return '';
+    return `<div class="card" style="padding: 14px; margin-top: 12px"><b>🌱 Cuidados de temporada</b>
+      <p class="sub" style="margin: 4px 0 0">${
+        data.keys.gemini
+          ? 'Pendiente: la voy a pedir a Gemini en cuanto haya conexión.'
+          : 'Cargá la clave de Gemini en Ajustes y te digo cuándo abonar, podar, hacer esquejes y sacar semillas de esta planta.'
+      }</p></div>`;
+  }
+  const events = eventsOf(ex);
+  const now = thisMonth();
+  const active = events.filter((e) => e.months.includes(now));
+  const abono = ex.abono?.cadaDias
+    ? `<button class="btn secondary block" style="margin-top: 10px" data-action="abono-task" data-id="${p.id}">⏰ Recordarme abonar cada ${ex.abono.cadaDias} días (solo en temporada)</button>`
+    : '';
+  return `<div class="card season" style="padding: 14px; margin-top: 12px">
+      <div class="care-head"><b>🌱 Cuidados de temporada</b>
+        <span class="sub">Gemini · seguridad ${esc(ex.confidence)}</span></div>
+      <p class="sub" style="margin: 6px 0 4px">${MONTHS[now - 1][0].toUpperCase()}${MONTHS[now - 1].slice(1)}: ${active.length ? 'esto toca ahora' : 'no hay nada especial este mes'}</p>
+      ${active.map((e) => eventLine(e, true)).join('')}
+      ${abono}
+      <details style="margin-top: 10px"><summary class="sub">Todo el año, reproducción y plagas</summary>
+        ${events.map((e) => eventLine(e, false)).join('')}
+        ${ex.plagas.length ? `<div class="ev"><b>🐛 Plagas</b><ul class="notes">${ex.plagas.map((x) => `<li>${esc(x)}</li>`).join('')}</ul></div>` : ''}
+        <p class="hint">Es una guía de una IA para tu zona: confirmá con tu planta y, ante la duda, probá en una sola rama o maceta.</p>
+      </details></div>`;
+}
+
+function eventLine(e, open) {
+  return `<div class="ev"><b>${e.icon} ${esc(e.label)}</b> <span class="sub">${esc(monthsText(e.months))}</span>
+    ${e.text ? `<div class="sub">${esc(e.text)}</div>` : ''}
+    ${e.steps.length ? `<ol class="steps">${e.steps.map((x) => `<li>${esc(x)}</li>`).join('')}</ol>` : ''}</div>`;
+}
+
+function viewCalendar() {
+  const start = thisMonth();
+  const months = Array.from({ length: 6 }, (_, k) => ((start - 1 + k) % 12) + 1);
+  const withData = data.plants.filter((p) => seasonOf(p)).length;
+  const blocks = months
+    .map((m, k) => {
+      const items = eventsInMonth(data.plants, seasonOf, m);
+      const by = new Map();
+      for (const { plant, event } of items) {
+        if (!by.has(event.label)) by.set(event.label, { icon: event.icon, plants: [] });
+        by.get(event.label).plants.push(plant);
+      }
+      return `<div class="card" style="padding: 14px; margin-bottom: 10px">
+        <b>${MONTHS[m - 1][0].toUpperCase()}${MONTHS[m - 1].slice(1)}${k === 0 ? ' · este mes' : ''}</b>
+        ${
+          by.size
+            ? [...by]
+                .map(
+                  ([label, v]) => `<div class="ev">${v.icon} ${esc(label)}:
+                    ${v.plants.map((p) => `<a href="#/p/${p.id}">${esc(p.name)}</a>`).join(', ')}</div>`,
+                )
+                .join('')
+            : '<div class="sub">Nada especial.</div>'
+        }</div>`;
+    })
+    .join('');
+  return `<div class="topbar">
+      <button class="icon-btn" data-action="back" aria-label="Volver">←</button>
+      <h1>Calendario</h1></div>
+    ${
+      withData === data.plants.length && withData
+        ? ''
+        : `<p class="hint" style="margin-top: 0">${
+            data.keys.gemini
+              ? 'Faltan datos de algunas plantas: se completan solas cuando Gemini responde.'
+              : 'Para llenar el calendario cargá la clave de Gemini en Ajustes.'
+          }</p>`
+    }
+    ${blocks}
+    <p class="hint">Te aviso el día 1 de cada mes a las 10:00 con lo que toca. Guía de una IA para tu zona.</p>`;
+}
 
 /* ---------- sumar novedad ---------- */
 
@@ -947,12 +1063,13 @@ function render() {
   } else if (name === 'novedad' && getPlant(id)) {
     if (!nov || nov.plantId !== id) nov = newNov(id);
     html = viewNovedad(getPlant(id));
-  } else if (name === 'ajustes') html = viewSettings();
+  } else if (name === 'calendario') html = viewCalendar();
+  else if (name === 'ajustes') html = viewSettings();
   else html = viewList();
 
   const keepScroll = window.scrollY;
   $app.innerHTML = html + soilSheet();
-  if (['new', 'edit', 'ajustes', 'novedad'].includes(name) && window.__keepScroll) window.scrollTo(0, keepScroll);
+  if (['new', 'edit', 'ajustes', 'novedad', 'calendario'].includes(name) && window.__keepScroll) window.scrollTo(0, keepScroll);
   else window.scrollTo(0, 0);
   window.__keepScroll = false;
 }
@@ -1188,6 +1305,23 @@ $app.addEventListener('click', async (e) => {
     return rerender();
   }
 
+  if (action === 'calendar') return go('/calendario');
+  if (action === 'abono-task') {
+    const p = getPlant(id);
+    const ex = p && seasonOf(p);
+    if (!ex?.abono?.cadaDias) return;
+    const { meses, cadaDias, conLoQueTengo, detalle } = ex.abono;
+    let due = addDays(dateStr(), cadaDias);
+    for (let k = 0; !meses.includes(Number(due.slice(5, 7))) && k < 400; k++) due = addDays(due, 1);
+    const t = makeTask({
+      title: `Abonar ${p.name}`, detail: conLoQueTengo || detalle || '', due, time: `${pad(data.settings.hour)}:${pad(data.settings.minute)}`,
+      every: cadaDias, months: meses, source: 'abono',
+    });
+    data.plants = data.plants.map((x) => (x.id === id ? { ...x, tasks: [...(x.tasks || []), t] } : x));
+    persist();
+    toast(`Listo: primer aviso el ${fmtDay(due)}`);
+    return render();
+  }
   if (action === 'soil') return answerSoil(el.dataset.v);
   if (action === 'soil-skip') {
     soilAsk = null;
@@ -1417,6 +1551,24 @@ $app.addEventListener('change', async (e) => {
     data.settings = { ...data.settings, hour: h, minute: m };
     persist();
     toast(`Aviso a las ${pad(h)}:${pad(m)}`);
+  }
+  if (t.id === 's-fert') {
+    const v = t.value.trim();
+    if (v !== (data.settings.myFertilizer || '')) {
+      data.settings = { ...data.settings, myFertilizer: v };
+      Object.values(data.species).forEach((sp) => {
+        if (sp.extra) sp.extraStale = true;
+        sp.extraTried = 0;
+      });
+      persist({ resched: false });
+      toast('Guardado. Actualizo las recomendaciones…');
+      syncAiCare();
+    }
+  }
+  if (t.id === 's-season') {
+    data.settings = { ...data.settings, seasonAlerts: t.checked };
+    persist();
+    toast(t.checked ? 'Avisos mensuales activados' : 'Avisos mensuales apagados');
   }
   if (t.id === 's-gkey') {
     data.keys.gemini = t.value.trim();

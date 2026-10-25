@@ -102,8 +102,9 @@ export function parseAnswer(raw) {
 const newId = () => `t${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
 
 /** Crea una tarea. every = cada cuántos días se repite (null = una sola vez); left = veces que faltan (null = sin fin). */
-export function makeTask({ title, detail = '', due, time = '09:00', every = null, left = null, source = 'novedad' }) {
+export function makeTask({ title, detail = '', due, time = '09:00', every = null, left = null, source = 'novedad', months = null }) {
   return {
+    months: months && months.length ? months : null,
     id: newId(),
     title: String(title).slice(0, 80),
     detail: String(detail).slice(0, 300),
@@ -141,7 +142,10 @@ export function completeTask(tasks, id, today = dateStr()) {
       continue;
     }
     if (t.every && (t.left === null || t.left > 1)) {
-      out.push({ ...t, due: addDays(today, t.every), left: t.left === null ? null : t.left - 1 });
+      let due = addDays(today, t.every);
+      // tareas de temporada (ej. abonar): si cae fuera de los meses indicados, pasa al primer día de la próxima temporada
+      for (let k = 0; t.months && !t.months.includes(Number(due.slice(5, 7))) && k < 400; k++) due = addDays(due, 1);
+      out.push({ ...t, due, left: t.left === null ? null : t.left - 1 });
     }
   }
   return out;

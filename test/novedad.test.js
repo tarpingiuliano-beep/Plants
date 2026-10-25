@@ -74,3 +74,15 @@ test('avisos de tareas: hora propia, ids únicos, vencidas', () => {
   assert.equal(dueTasks([p], '2026-10-15').length, 1);
   assert.match(taskText(tasks[1], '2026-10-15'), /en 3 días · 08:00/);
 });
+
+import { makeTask } from '../src/novedad.js';
+
+test('tarea de temporada: al repetirse salta al primer día de la próxima temporada', () => {
+  const t = makeTask({ title: 'Abonar', due: '2026-11-20', every: 21, months: [9, 10, 11] });
+  // se hace el 20/11: +21 días = 11/12, fuera de temporada → primer día de septiembre del año siguiente
+  const next = completeTask([t], t.id, '2026-11-20')[0];
+  assert.equal(next.due, '2027-09-01');
+  // dentro de temporada no salta
+  const t2 = makeTask({ title: 'Abonar', due: '2026-09-10', every: 21, months: [9, 10, 11] });
+  assert.equal(completeTask([t2], t2.id, '2026-09-10')[0].due, '2026-10-01');
+});

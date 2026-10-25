@@ -118,3 +118,99 @@ export async function askCare(ctx, key, model) {
     return { error: 'No pude conectarme con Google.' };
   }
 }
+
+/* ---------- Ficha de temporada: abono, poda, trasplante, reproducción, plagas ---------- */
+
+export function buildExtraPrompt({ sci, commonName, place, myFertilizer }) {
+  return `Sos un experto en jardinería y propagación de plantas. Necesito la ficha de temporada de esta planta:
+
+- Especie: ${sci}${commonName ? ` (${commonName})` : ''}
+- Vivo en: ${place?.name || 'Argentina (hemisferio sur)'}. Todos los meses que me des tienen que ser los de mi hemisferio (1 = enero ... 12 = diciembre).
+- Abono que tengo en casa: ${myFertilizer?.trim() || 'ninguno en particular'}
+
+Respondé SOLO con un JSON con esta forma (usá null en lo que no aplique a esta especie):
+{
+  "abono": { "meses": [números 1-12 en que conviene abonar], "cada_dias": número, "con_lo_que_tengo": "cuánto y cómo usar mi abono, en una oración", "detalle": "consejo corto" },
+  "poda": { "meses": [números], "detalle": "cómo y cuánto podar" },
+  "trasplante": { "meses": [números], "cada_meses": número, "detalle": "señales y cómo hacerlo" },
+  "reproduccion": {
+    "metodos": [ { "tipo": "semilla" | "esqueje" | "division" | "hijuelos" | "acodo", "meses": [números], "pasos": ["hasta 6 pasos cortos"] } ],
+    "semillas": { "meses_cosecha": [números en que maduran las semillas o frutos], "como_extraerlas": ["hasta 6 pasos cortos para extraerlas, secarlas y guardarlas"] }
+  },
+  "plagas": ["hasta 3 plagas o enfermedades típicas y cómo prevenirlas"],
+  "seguridad": "alta" | "media" | "baja"
+}
+Reglas: no inventes; si esta especie no se reproduce por un método, no lo pongas. Si no conocés bien la especie, ponelo en "seguridad": "baja".`;
+}
+
+const monthsOf = (v) =>
+  [...new Set((Array.isArray(v) ? v : []).map((m) => Math.round(Number(m))).filter((m) => m >= 1 && m <= 12))].sort((a, b) => a - b);
+const lines = (v, n = 6, len = 200) =>
+  (Array.isArray(v) ? v : []).map((x) => String(x).trim().slice(0, len)).filter(Boolean).slice(0, n);
+const text = (v, len = 240) => (typeof v === 'string' ? v.trim().slice(0, len) : '');
+const KINDS = ['semilla', 'esqueje', 'division', 'hijuelos', 'acodo'];
+
+/** Valida la ficha de temporada. Devuelve el objeto "extra" o null si no sirve. */
+export function parseExtra(raw) {
+  let j;
+  try {
+    const t = String(raw).trim().replace(/^```(?:json)?\s*|\s*```$/g, '');
+    j = JSON.parse(t.slice(t.indexOf('{'), t.lastIndexOf('}') + 1));
+  } catch {
+    return null;
+  }
+  if (!j || typeof j !== 'object') return null;
+  const abonoMeses = monthsOf(j.abono?.meses);
+  const poda = monthsOf(j.poda?.meses);
+  const trasp = monthsOf(j.trasplante?.meses);
+  const metodos = (Array.isArray(j.reproduccion?.metodos) ? j.reproduccion.metodos : [])
+    .map((m) => ({ tipo: KINDS.includes(m?.tipo) ? m.tipo : null, meses: monthsOf(m?.meses), pasos: lines(m?.pasos) }))
+    .filter((m) => m.tipo && (m.meses.length || m.pasos.length));
+  const semMeses = monthsOf(j.reproduccion?.semillas?.meses_cosecha);
+  const semPasos = lines(j.reproduccion?.semillas?.como_extraerlas);
+  const extra = {
+    abono: abonoMeses.length
+      ? {
+          meses: abonoMeses,
+          cadaDias: Number(j.abono.cada_dias) > 0 ? clamp(Math.round(Number(j.abono.cada_dias)), 7, 180) : null,
+          conLoQueTengo: text(j.abono.con_lo_que_tengo),
+          detalle: text(j.abono.detalle),
+        }
+      : null,
+    poda: poda.length ? { meses: poda, detalle: text(j.poda.detalle) } : null,
+    trasplante: trasp.length
+      ? { meses: trasp, cadaMeses: Number(j.trasplante.cada_meses) > 0 ? clamp(Math.round(Number(j.trasplante.cada_meses)), 3, 120) : null, detalle: text(j.trasplante.detalle) }
+      : null,
+    reproduccion: { metodos, semillas: semMeses.length || semPasos.length ? { meses: semMeses, pasos: semPasos } : null },
+    plagas: lines(j.plagas, 3, 160),
+    confidence: ['alta', 'media', 'baja'].includes(j.seguridad) ? j.seguridad : 'media',
+    fetchedAt: Date.now(),
+  };
+  const any = extra.abono || extra.poda || extra.trasplante || metodos.length || extra.reproduccion.semillas || extra.plagas.length;
+  return any ? extra : null;
+}
+
+/** Pide la ficha de temporada. { extra } o { error, quota } */
+export async function askExtra(ctx, key, model) {
+  try {
+    const res = await fetch(`${BASE}/models/${model}:generateContent`, {
+      method: 'POST',
+      headers: { 'x-goog-api-key': key, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: buildExtraPrompt(ctx) }] }],
+        generationConfig: { responseMimeType: 'application/json', temperature: 0.2 },
+      }),
+    });
+    if (res.status === 429) return { error: 'Llegaste al límite gratuito de Gemini.', quota: true };
+    if (!res.ok) {
+      const m = await errMsg(res);
+      return { error: `Gemini respondió error ${res.status}${m ? `: ${m}` : ''}` };
+    }
+    const j = await res.json();
+    const t = j.candidates?.[0]?.content?.parts?.map((p) => p.text || '').join('') || '';
+    const extra = parseExtra(t);
+    return extra ? { extra } : { error: 'No pude leer la ficha de temporada.' };
+  } catch {
+    return { error: 'No pude conectarme con Google.' };
+  }
+}

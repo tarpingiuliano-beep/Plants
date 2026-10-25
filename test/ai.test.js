@@ -72,3 +72,50 @@ test('askCare y testGeminiKey con respuestas simuladas', async () => {
     globalThis.fetch = real;
   }
 });
+
+import { parseExtra, buildExtraPrompt, askExtra } from '../src/ai.js';
+
+test('ficha de temporada: valida meses, pasos y descarta basura', () => {
+  const e = parseExtra(JSON.stringify({
+    abono: { meses: [9, 10, 10, 13, 0, '11'], cada_dias: 1, con_lo_que_tengo: 'Una cucharada de humus por maceta', detalle: 'x' },
+    poda: null,
+    trasplante: { meses: [9], cada_meses: 24, detalle: 'Cuando salgan raíces por abajo' },
+    reproduccion: {
+      metodos: [
+        { tipo: 'esqueje', meses: [10, 11], pasos: ['a', 'b', 'c', 'd', 'e', 'f', 'g'] },
+        { tipo: 'inventado', meses: [1], pasos: ['x'] },
+      ],
+      semillas: { meses_cosecha: [3, 4], como_extraerlas: ['Esperá a que la cápsula se seque', 'Abrila', 'Secá las semillas'] },
+    },
+    plagas: ['Pulgón', 'Cochinilla', 'Arañuela', 'Mosca blanca'],
+    seguridad: 'ALTA',
+  }));
+  assert.deepEqual(e.abono.meses, [9, 10, 11]);
+  assert.equal(e.abono.cadaDias, 7); // mínimo razonable
+  assert.equal(e.poda, null);
+  assert.equal(e.trasplante.cadaMeses, 24);
+  assert.equal(e.reproduccion.metodos.length, 1);
+  assert.equal(e.reproduccion.metodos[0].pasos.length, 6);
+  assert.deepEqual(e.reproduccion.semillas.meses, [3, 4]);
+  assert.equal(e.plagas.length, 3);
+  assert.equal(e.confidence, 'media'); // 'ALTA' en mayúsculas no es válido: queda por defecto
+  assert.equal(parseExtra('no json'), null);
+  assert.equal(parseExtra('{"abono":{"meses":[]},"plagas":[]}'), null);
+});
+
+test('el pedido de temporada usa mi abono y mi ciudad', async () => {
+  const t = buildExtraPrompt({ sci: 'Impatiens hawkeri', place: { name: 'Venado Tuerto, Santa Fe' }, myFertilizer: 'humus de lombriz' });
+  assert.match(t, /humus de lombriz/);
+  assert.match(t, /Venado Tuerto/);
+  const real = globalThis.fetch;
+  try {
+    globalThis.fetch = async () => new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: '{"poda":{"meses":[9],"detalle":"d"},"seguridad":"alta"}' }] } }] }));
+    const r = await askExtra({ sci: 'x' }, 'K', 'm');
+    assert.deepEqual(r.extra.poda.meses, [9]);
+    assert.equal(r.extra.confidence, 'alta');
+    globalThis.fetch = async () => new Response('{}', { status: 429 });
+    assert.equal((await askExtra({ sci: 'x' }, 'K', 'm')).quota, true);
+  } finally {
+    globalThis.fetch = real;
+  }
+});

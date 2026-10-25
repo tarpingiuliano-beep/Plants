@@ -611,3 +611,14 @@ input[type='password'] {
   grid-template-columns: 1fr 1fr;
   gap: 8px;
 }
+
+.ev {
+  margin: 8px 0;
+}
+.ev a {
+  color: var(--green);
+  font-weight: 600;
+}
+.season details summary {
+  cursor: pointer;
+}
