@@ -34,7 +34,7 @@ test('respaldo: aviso, guardar, restaurar (sumar y reemplazar)', async () => {
   const input = document.getElementById('backup-input');
   Object.defineProperty(input, 'files', { value: [file], configurable: true });
   input.dispatchEvent(new Event('change', { bubbles: true })); await wait(80);
-  expect(app.textContent).toContain('2 plantas y 0 especies');
+  expect(app.textContent).toContain('2 plantas, 0 proyectos y 0 especies');
   app.querySelector('[data-action="restore-merge"]').click(); await wait(50);
   let s = JSON.parse(localStorage.getItem('plantas.v1'));
   expect(s.plants.map((p) => p.name)).toEqual(['Palmera', 'Aguacate']);

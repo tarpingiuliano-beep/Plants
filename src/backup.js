@@ -12,6 +12,7 @@ export function buildBackup(data, now = new Date()) {
     exportedAt: now.toISOString(),
     data: {
       plants: data.plants || [],
+      projects: data.projects || [],
       species: data.species || {},
       settings: data.settings || {},
       place: data.place || null,
@@ -46,6 +47,7 @@ export function parseBackup(text) {
       exportedAt: j.exportedAt || null,
       data: {
         plants,
+        projects: (Array.isArray(d.projects) ? d.projects : []).filter((p) => p && typeof p === 'object' && typeof p.id === 'string' && p.id && p.plan && Array.isArray(p.plan.etapas)),
         species: d.species && typeof d.species === 'object' ? d.species : {},
         settings: d.settings && typeof d.settings === 'object' ? d.settings : {},
         place: d.place && typeof d.place === 'object' ? d.place : null,
@@ -57,7 +59,7 @@ export function parseBackup(text) {
 
 export function summarize(d) {
   const photos = (d.plants || []).reduce((n, p) => n + (p.photo ? 1 : 0), 0);
-  return { plants: (d.plants || []).length, species: Object.keys(d.species || {}).length, photos };
+  return { plants: (d.plants || []).length, projects: (d.projects || []).length, species: Object.keys(d.species || {}).length, photos };
 }
 
 /** Reemplaza todo lo guardado por el respaldo; conserva las claves y el clima de este celular. */
@@ -66,6 +68,7 @@ export function replaceWith(current, incoming) {
   return {
     ...current,
     plants: incoming.plants,
+    projects: incoming.projects || [],
     species: incoming.species,
     settings: { ...current.settings, ...incoming.settings },
     place: incoming.place || current.place,
@@ -84,9 +87,12 @@ export function mergeWith(current, incoming) {
     added.push({ ...p, nid: nid++ });
   }
   const species = { ...incoming.species, ...current.species };
+  const haveJ = new Set((current.projects || []).map((p) => p.id));
+  const newJ = (incoming.projects || []).filter((p) => !haveJ.has(p.id));
   return {
-    data: { ...current, plants: [...current.plants, ...added], species, nextNid: nid, place: current.place || incoming.place },
+    data: { ...current, plants: [...current.plants, ...added], projects: [...(current.projects || []), ...newJ], species, nextNid: nid, place: current.place || incoming.place },
     added: added.length,
+    addedProjects: newJ.length,
     skipped: incoming.plants.length - added.length,
   };
 }

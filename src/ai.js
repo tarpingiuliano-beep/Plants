@@ -214,3 +214,27 @@ export async function askExtra(ctx, key, model) {
     return { error: 'No pude conectarme con Google.' };
   }
 }
+
+
+/** Pide a Gemini una respuesta JSON para un texto cualquiera. { text } o { error, quota } */
+export async function askJson(prompt, key, model) {
+  try {
+    const res = await fetch(`${BASE}/models/${model}:generateContent`, {
+      method: 'POST',
+      headers: { 'x-goog-api-key': key, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: prompt }] }],
+        generationConfig: { responseMimeType: 'application/json', temperature: 0.3 },
+      }),
+    });
+    if (res.status === 429) return { error: 'Llegaste al límite gratuito de Gemini. Probá más tarde.', quota: true };
+    if (!res.ok) {
+      const m = await errMsg(res);
+      return { error: `Gemini respondió error ${res.status}${m ? `: ${m}` : ''}` };
+    }
+    const j = await res.json();
+    return { text: j.candidates?.[0]?.content?.parts?.map((p) => p.text || '').join('') || '' };
+  } catch {
+    return { error: 'No pude conectarme con Google.' };
+  }
+}

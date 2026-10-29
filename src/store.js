@@ -8,6 +8,7 @@ const REC = 'state';
 
 export const defaultState = () => ({
   plants: [],
+  projects: [], // proyectos (germinar, bonsái…)
   settings: { hour: 9, minute: 0 },
   nextNid: 1,
   place: null, // { name, lat, lon }
@@ -24,6 +25,7 @@ function normalize(d) {
     ...base,
     ...d,
     plants: Array.isArray(d.plants) ? d.plants : [],
+    projects: Array.isArray(d.projects) ? d.projects : [],
     settings: { ...base.settings, ...(d.settings || {}) },
     keys: { ...base.keys, ...(d.keys || {}) },
     species: d.species && typeof d.species === 'object' ? d.species : {},

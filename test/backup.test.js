@@ -23,7 +23,7 @@ test('el respaldo no lleva claves ni clima', () => {
 test('ida y vuelta y validaciones', () => {
   const r = parseBackup(JSON.stringify(buildBackup(cur())));
   assert.ok(r.ok);
-  assert.deepEqual(summarize(r.backup.data), { plants: 2, species: 1, photos: 1 });
+  assert.deepEqual(summarize(r.backup.data), { plants: 2, projects: 0, species: 1, photos: 1 });
   assert.equal(parseBackup('no json').ok, false);
   assert.equal(parseBackup('{"app":"otra","data":{}}').ok, false);
   assert.match(parseBackup('{"app":"plantas","version":99,"data":{"plants":[]}}').error, /más nueva/);
@@ -61,4 +61,19 @@ test('recordatorio de respaldo', () => {
   assert.equal(daysSinceBackup('basura', now), null);
   assert.match(lastBackupText('2026-10-12T12:00:00Z', now), /hace 3 días/);
   assert.match(lastBackupText(null, now), /Todavía no/);
+});
+
+test('los proyectos viajan en el respaldo y se suman sin duplicar', async () => {
+  const { buildBackup, parseBackup, mergeWith, replaceWith } = await import('../src/backup.js');
+  const { createProject, templateById } = await import('../src/projects.js');
+  const plan = templateById('palta').build();
+  const j = createProject({ name: 'Palta', startDate: '2026-10-01', plan });
+  const cur = { plants: [], projects: [], species: {}, settings: {}, nextNid: 1 };
+  const r = parseBackup(JSON.stringify(buildBackup({ ...cur, projects: [j] })));
+  assert.equal(r.backup.data.projects.length, 1);
+  const m = mergeWith({ ...cur, projects: [j] }, r.backup.data);
+  assert.equal(m.data.projects.length, 1);
+  assert.equal(m.addedProjects, 0);
+  assert.equal(replaceWith(cur, r.backup.data).projects.length, 1);
+  assert.equal(mergeWith(cur, r.backup.data).data.projects.length, 1);
 });

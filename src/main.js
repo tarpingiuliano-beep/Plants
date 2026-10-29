@@ -4,7 +4,8 @@ import { Geolocation } from '@capacitor/geolocation';
 import { defaultState, loadAsync, save, flushNow, setSaveErrorHandler } from './store.js';
 import { buildBackup, backupFileName, parseBackup, summarize, replaceWith, mergeWith, needsBackupReminder, lastBackupText } from './backup.js';
 import { refreshCare } from './migrate.js';
-import { askCare, askExtra, testGeminiKey } from './ai.js';
+import { askCare, askExtra, askJson, testGeminiKey } from './ai.js';
+import { TEMPLATES, templateById, buildPlanPrompt, parsePlan, stageTask, stageState, stageEnd, createProject, projectProgress, addLog } from './projects.js';
 import { MONTHS, eventsOf, eventsInMonth, digestText, buildMonthlyDigests, monthsText } from './extras.js';
 import { shareTextFile, copyText, sharePhotosWithText } from './files.js';
 import {
@@ -66,6 +67,10 @@ const $toast = document.getElementById('toast');
 const esc = (s) =>
   String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 const pad = (n) => String(n).padStart(2, '0');
+const fmtDate = (ymd) => {
+  const [y, m, d] = String(ymd).split('-').map(Number);
+  return `${d}/${m}/${y}`;
+};
 const fmtDay = (s) => {
   const [y, m, d] = s.split('-').map(Number);
   return new Date(y, m - 1, d).toLocaleDateString('es-AR', { day: 'numeric', month: 'short' });
@@ -102,6 +107,8 @@ const go = (path, replace = false) => {
 };
 
 const getPlant = (id) => data.plants.find((p) => p.id === id);
+const getProject = (id) => data.projects.find((p) => p.id === id);
+const holders = () => [...data.plants, ...data.projects.filter((j) => !j.done)];
 const seasonOf = (p) => (p.sci ? data.species[p.sci]?.extra || null : null);
 const careOf = (p) => (p.sci ? data.species[p.sci]?.care || lookup(p.sci, p.genus, p.family) : null);
 
@@ -110,7 +117,7 @@ const extraAlerts = () => [
   ...buildColdAlerts(data.plants, data.climate, careOf, placementOf),
   ...buildHeatAlerts(data.plants, data.climate, careOf, placementOf),
   ...buildStormAlerts(data.plants, data.climate, placementOf),
-  ...buildTaskSchedule(data.plants),
+  ...buildTaskSchedule(holders()),
   ...(data.settings.seasonAlerts === false ? [] : buildMonthlyDigests(data.plants, seasonOf)),
 ];
 
@@ -424,11 +431,11 @@ function viewList() {
     banners.push(`<div class="banner"><span>💾 ${data.lastBackup ? 'Hace rato que no hacés un respaldo.' : 'Todavía no hiciste un respaldo de tus plantas.'}</span>
       <button class="btn" data-action="settings">Respaldar</button></div>`);
   }
-  const due = dueTasks(data.plants, today);
+  const due = dueTasks(holders(), today);
   if (due.length) {
     const first = due[0];
     banners.push(`<div class="banner"><span>📋 ${due.length === 1 ? '1 tarea para hoy' : `${due.length} tareas para hoy`}: ${esc(first.plant.name)} — ${esc(first.task.title)}${due.length > 1 ? '…' : ''}</span>
-      <button class="btn" data-action="open" data-id="${first.plant.id}">Ver</button></div>`);
+      <button class="btn" data-action="open-any" data-id="${first.plant.id}">Ver</button></div>`);
   }
   if (!data.place) {
     banners.push(`<div class="banner"><span>📍 Elegí dónde vivís y ajusto el riego al clima de tu zona.</span>
@@ -498,6 +505,7 @@ function viewList() {
     ${data.place ? `<p class="sub" style="margin: -6px 0 12px">${weatherLine()}</p>` : ''}
     ${banners.join('')}
     ${plants.length ? cards : empty}
+    ${projectsListHtml()}
     <button class="fab" data-action="new" aria-label="Agregar planta">+</button>`;
 }
 
@@ -813,7 +821,7 @@ function viewSettings() {
       ${
         pendingRestore
           ? `<div class="banner" style="display: block; margin-top: 10px">
-              <b>Este respaldo tiene ${pendingRestore.summary.plants} plantas y ${pendingRestore.summary.species} especies</b>
+              <b>Este respaldo tiene ${pendingRestore.summary.plants} plantas, ${pendingRestore.summary.projects || 0} proyectos y ${pendingRestore.summary.species} especies</b>
               ${pendingRestore.backup.exportedAt ? `<div class="sub">Guardado el ${esc(fmtWhen(pendingRestore.backup.exportedAt))}</div>` : ''}
               <div class="stack" style="margin-top: 10px">
                 <button class="btn block" data-action="restore-merge">Sumar a lo que ya tengo</button>
@@ -1048,6 +1056,244 @@ async function saveNov(withTasks) {
   go(`/p/${p.id}`, true);
 }
 
+/* ---------- proyectos ---------- */
+
+let pj = null; // asistente de "Nuevo proyecto"
+const newPj = () => ({ step: 'pick', templateId: null, bonsai: false, name: '', startDate: dateStr(), description: '', raw: '', plan: null, msg: '', busy: false });
+
+function projectsListHtml() {
+  const today = dateStr();
+  const cards = data.projects
+    .map((j) => {
+      const pr = projectProgress(j, today);
+      const due = (j.tasks || []).filter((t) => daysBetween(today, t.due) <= 0).length;
+      const sub = j.done ? 'Terminado' : pr.notStarted ? 'Todavía no empezó' : `Día ${pr.day}${pr.total ? ` de ${pr.total}` : ''}`;
+      return `<div class="card plant-card" data-action="open-pj" data-id="${j.id}">
+        <div class="thumb">${j.log.find((l) => l.photo) ? `<img class="thumb" src="${j.log.find((l) => l.photo).photo}" alt="" />` : j.icon}</div>
+        <div class="info"><div class="name">${esc(j.name)}</div><div class="sub">${esc(sub)}</div>
+        ${due ? `<span class="chip today">${due} ${due === 1 ? 'tarea' : 'tareas'} para hoy</span>` : ''}</div></div>`;
+    })
+    .join('');
+  return `<h2>Proyectos</h2>${cards || '<p class="sub" style="margin: -4px 0 8px">Germinar semillas, hacer un bonsái… con su cronología, avisos y diario con fotos.</p>'}
+    <button class="btn secondary block" data-action="pj-new">+ Nuevo proyecto</button>`;
+}
+
+const hasGemini = () => !!data.keys.gemini;
+
+function viewPjNew() {
+  const head = `<div class="topbar"><button class="icon-btn" data-action="pj-back" aria-label="Volver">←</button><h1>Nuevo proyecto</h1></div>`;
+  if (pj.step === 'pick') {
+    return `${head}<p class="sub">¿Qué querés hacer?</p>
+      ${TEMPLATES.map((t) => `<div class="card plant-card" data-action="pj-pick" data-id="${t.id}"><div class="thumb">${t.icon}</div><div class="info"><div class="name">${esc(t.name)}</div><div class="sub">${esc(t.desc)}</div></div></div>`).join('')}
+      <div class="card plant-card" data-action="pj-pick" data-id="custom"><div class="thumb">✨</div><div class="info"><div class="name">Otro proyecto, a medida</div><div class="sub">Me contás qué querés hacer y armo el plan con Gemini.</div></div></div>`;
+  }
+  if (pj.step === 'form') {
+    const t = templateById(pj.templateId);
+    return `${head}<div class="card" style="padding: 16px">
+      <label for="pj-name" style="margin-top: 0">Nombre</label>
+      <input id="pj-name" maxlength="60" value="${esc(pj.name)}" placeholder="Ej: Perales de semilla" />
+      <label for="pj-start">Fecha de inicio</label>
+      <input id="pj-start" type="date" value="${esc(pj.startDate)}" />
+      <p class="hint">Puede ser una fecha pasada si ya empezaste: voy a saltear lo que ya quedó atrás.</p>
+      ${t ? t.options.map((o) => `<label class="check" style="margin-top: 10px"><input type="checkbox" id="pj-bonsai" ${pj.bonsai ? 'checked' : ''} /> ${esc(o.label)}</label>`).join('') : `
+        <label for="pj-desc">¿Qué querés hacer y cómo?</label>
+        <textarea id="pj-desc" rows="6" maxlength="3000" placeholder="Ej: dos semillas de palta, una para bonsái y otra con alambre. Las pongo en agua con palillos…">${esc(pj.description)}</textarea>
+        <p class="hint">Podés pegar el método que encontraste. ${hasGemini() ? 'Gemini arma el plan con fechas.' : 'Sin clave de Gemini te preparo un pedido para llevar a Gemini y traer la respuesta.'}</p>`}
+      ${pj.msg ? `<p class="status warn" style="margin-top: 10px">${esc(pj.msg)}</p>` : ''}
+      <button class="btn block" style="margin-top: 12px" data-action="pj-plan" ${pj.busy ? 'disabled' : ''}>${pj.busy ? 'Armando el plan…' : t ? 'Ver el plan' : hasGemini() ? 'Armar el plan con Gemini' : 'Armar el pedido'}</button>
+    </div>`;
+  }
+  if (pj.step === 'ask') {
+    return `${head}<div class="card" style="padding: 16px">
+      <b>1. Llevalo a Gemini</b>
+      <button class="btn block" style="margin-top: 10px" data-action="pj-copy">📋 Copiar el pedido</button>
+      <details style="margin-top: 10px"><summary class="sub">Ver el pedido</summary><textarea rows="8" readonly>${esc(pjPrompt())}</textarea></details></div>
+      <div class="card" style="padding: 16px; margin-top: 12px"><b>2. Traé la respuesta</b>
+      <textarea id="pj-raw" rows="6" placeholder="Pegá la respuesta de Gemini">${esc(pj.raw)}</textarea>
+      ${pj.msg ? `<p class="status warn" style="margin-top: 10px">${esc(pj.msg)}</p>` : ''}
+      <button class="btn block" style="margin-top: 10px" data-action="pj-read">Leer respuesta</button>
+      <button class="btn secondary block" style="margin-top: 8px" data-action="pj-edit">← Cambiar lo que escribí</button></div>`;
+  }
+  // review
+  const plan = pj.plan;
+  const today = dateStr();
+  const t = templateById(pj.templateId);
+  const srcText = plan.source === 'Gemini' ? `armado por Gemini (seguridad ${plan.confidence})` : 'plantilla general de la app, no una consulta a una IA';
+  return `${head}<div class="card" style="padding: 16px">
+      <b>${esc(pj.name)}</b> <span class="sub">· ${esc(srcText)}</span>
+      ${plan.resumen ? `<p style="margin: 8px 0 0">${esc(plan.resumen)}</p>` : ''}
+      ${plan.materiales.length ? `<p class="sub" style="margin: 8px 0 0">Necesitás: ${plan.materiales.map(esc).join(' · ')}</p>` : ''}
+      ${plan.consejos.length ? `<ul class="notes">${plan.consejos.map((c) => `<li>🌱 ${esc(c)}</li>`).join('')}</ul>` : ''}
+      ${plan.alertas.length ? `<ul class="notes">${plan.alertas.map((c) => `<li>⚠️ ${esc(c)}</li>`).join('')}</ul>` : ''}
+      <p class="hint">${t ? 'Es un plan general: ajustalo a tu caso.' : 'Es una orientación de una IA; verificá lo importante.'}</p></div>
+    <h2>Avisos</h2><p class="sub" style="margin: -4px 0 8px">Tildá las etapas de las que querés que te avise. Las que ya pasaron quedan sin tildar.</p>
+    ${plan.etapas
+      .map((e, i) => {
+        const st = stageState(e, pj.startDate, today);
+        const tk = stageTask(e, pj.startDate, today);
+        const when = tk ? `Aviso: ${fmtDate(tk.due)}` : 'Ya pasó';
+        return `<div class="card" style="padding: 14px; margin-bottom: 10px">
+          <label class="check"><input type="checkbox" class="pj-chk" data-i="${i}" ${tk && st !== 'pasada' ? 'checked' : ''} ${tk ? '' : 'disabled'} /> <b>${esc(e.titulo)}</b></label>
+          <div class="sub" style="margin: 4px 0">Día ${e.dia}${e.cada ? ` · cada ${e.cada} días${e.veces ? `, ${e.veces} veces` : ''}` : ''} · ${esc(when)}</div>
+          <div class="sub">${esc(e.detalle)}</div></div>`;
+      })
+      .join('')}
+    <div class="row"><div><label class="sub">Hora de los avisos</label><input type="time" id="pj-time" value="${pad(data.settings.hour)}:${pad(data.settings.minute)}" /></div></div>
+    <button class="btn block" style="margin-top: 12px" data-action="pj-create">Crear proyecto</button>
+    <button class="btn secondary block" style="margin-top: 8px" data-action="pj-edit">← Volver</button>`;
+}
+
+function pjPrompt() {
+  return buildPlanPrompt({ name: pj.name || 'Mi proyecto', description: pj.description, startDate: pj.startDate, place: data.place, climate: data.climate });
+}
+
+function syncPj() {
+  if (!pj) return;
+  const v = (id) => document.getElementById(id);
+  if (v('pj-name')) pj.name = v('pj-name').value;
+  if (v('pj-start') && v('pj-start').value) pj.startDate = v('pj-start').value;
+  if (v('pj-desc')) pj.description = v('pj-desc').value;
+  if (v('pj-bonsai')) pj.bonsai = v('pj-bonsai').checked;
+  if (v('pj-raw')) pj.raw = v('pj-raw').value;
+}
+
+async function pjMakePlan() {
+  syncPj();
+  if (!pj.name.trim()) return ((pj.msg = 'Ponele un nombre al proyecto.'), render());
+  if (!pj.startDate) return ((pj.msg = 'Elegí la fecha de inicio.'), render());
+  pj.msg = '';
+  const t = templateById(pj.templateId);
+  if (t) {
+    pj.plan = { ...t.build({ bonsai: pj.bonsai }), source: 'plantilla', confidence: null };
+    pj.step = 'review';
+    return render();
+  }
+  if (!pj.description.trim()) return ((pj.msg = 'Contame qué querés hacer.'), render());
+  if (!hasGemini()) {
+    pj.step = 'ask';
+    return render();
+  }
+  if (!online()) return ((pj.msg = 'Necesito internet para consultar a Gemini.'), render());
+  pj.busy = true;
+  render();
+  if (!data.keys.geminiModel) {
+    const tk = await testGeminiKey(data.keys.gemini);
+    if (tk.ok) data.keys.geminiModel = tk.model;
+  }
+  const r = data.keys.geminiModel ? await askJson(pjPrompt(), data.keys.gemini, data.keys.geminiModel) : { error: 'No pude validar la clave de Gemini.' };
+  pj.busy = false;
+  if (r.error) {
+    if (/ 404/.test(r.error)) data.keys.geminiModel = '';
+    pj.msg = r.error;
+    return render();
+  }
+  const pr = parsePlan(r.text);
+  if (!pr.ok) {
+    pj.msg = pr.error;
+    return render();
+  }
+  pj.plan = pr.plan;
+  pj.step = 'review';
+  render();
+}
+
+function pjCreate() {
+  const time = document.getElementById('pj-time')?.value || '09:00';
+  const today = dateStr();
+  const tasks = [];
+  document.querySelectorAll('.pj-chk').forEach((c) => {
+    if (!c.checked) return;
+    const tk = stageTask(pj.plan.etapas[Number(c.dataset.i)], pj.startDate, today, time);
+    if (tk) tasks.push(tk);
+  });
+  const t = templateById(pj.templateId);
+  const proj = createProject({ name: pj.name, templateId: pj.templateId, description: pj.description, startDate: pj.startDate, plan: pj.plan, icon: t?.icon || '🌱', tasks });
+  data.projects = [...data.projects, proj];
+  persist();
+  pj = null;
+  toast(tasks.length ? `Proyecto creado · ${tasks.length} ${tasks.length === 1 ? 'aviso' : 'avisos'} 🔔` : 'Proyecto creado');
+  go(`/proyecto/${proj.id}`, true);
+}
+
+let pjPhoto = null; // foto del diario en preparación (data URL)
+
+function viewProject(j) {
+  const today = dateStr();
+  const pr = projectProgress(j, today);
+  const photos = j.log.filter((l) => l.photo);
+  const first = photos[photos.length - 1];
+  const last = photos[0];
+  const tasks = [...(j.tasks || [])].sort((a, b) => a.due.localeCompare(b.due));
+  const src = j.plan.source === 'Gemini' ? `armado por Gemini (seguridad ${j.plan.confidence})` : 'plantilla general de la app';
+  return `<div class="topbar"><button class="icon-btn" data-action="back" aria-label="Volver">←</button><h1>${esc(j.icon)} ${esc(j.name)}</h1></div>
+    <div class="card" style="padding: 16px">
+      <b>${j.done ? 'Proyecto terminado' : pr.notStarted ? `Empieza el ${esc(fmtDate(j.startDate))}` : `Día ${pr.day}${pr.total ? ` de ${pr.total}` : ''}`}</b>
+      ${pr.total ? `<div class="bar" style="height: 8px; border-radius: 4px; background: rgba(127,127,127,.25); margin: 8px 0"><div style="height: 100%; width: ${pr.pct}%; border-radius: 4px; background: var(--accent, #2e7d32)"></div></div>` : ''}
+      <div class="sub">Desde el ${esc(fmtDate(j.startDate))} · plan: ${esc(src)}</div>
+      ${j.plan.resumen ? `<p style="margin: 8px 0 0">${esc(j.plan.resumen)}</p>` : ''}
+      <details style="margin-top: 8px"><summary class="sub">Materiales, consejos y alertas</summary>
+        ${j.plan.materiales.length ? `<p class="sub">Necesitás: ${j.plan.materiales.map(esc).join(' · ')}</p>` : ''}
+        <ul class="notes">${j.plan.consejos.map((c) => `<li>🌱 ${esc(c)}</li>`).join('')}${j.plan.alertas.map((c) => `<li>⚠️ ${esc(c)}</li>`).join('')}</ul></details>
+    </div>
+    <h2>Tareas pendientes</h2>
+    ${
+      tasks.length
+        ? tasks
+            .map((t) => {
+              const late = daysBetween(today, t.due) < 0;
+              return `<div class="card" style="padding: 14px; margin-bottom: 10px">
+              <b>${esc(t.title)}</b> <span class="chip ${late ? 'overdue' : daysBetween(today, t.due) === 0 ? 'today' : 'soon'}">${late ? 'Atrasada' : daysBetween(today, t.due) === 0 ? 'Hoy' : esc(fmtDate(t.due))}</span>
+              ${t.detail ? `<div class="sub" style="margin: 4px 0 8px">${esc(t.detail)}</div>` : ''}
+              <div class="row"><button class="btn secondary" data-action="task-done" data-id="${j.id}" data-tid="${t.id}">✓ Hecha</button>
+              <button class="btn secondary" data-action="task-del" data-id="${j.id}" data-tid="${t.id}" aria-label="Borrar tarea">🗑</button></div></div>`;
+            })
+            .join('')
+        : '<p class="sub">No hay tareas con aviso.</p>'
+    }
+    <h2>Cronología del plan</h2>
+    <div class="card" style="padding: 14px">${j.plan.etapas
+      .map((e) => {
+        const st = stageState(e, j.startDate, today);
+        const mark = st === 'pasada' ? '✅' : st === 'en curso' ? '▶️' : '⏳';
+        return `<div style="margin-bottom: 8px">${mark} <b>${esc(e.titulo)}</b> <span class="sub">· día ${e.dia}${e.cada ? `–${stageEnd(e)}` : ''} (${esc(fmtDate(addDays(j.startDate, e.dia)))})</span></div>`;
+      })
+      .join('')}</div>
+    <h2>Diario</h2>
+    ${first && last && first !== last ? `<div class="card" style="padding: 14px"><b>Primera foto vs. última</b><div class="row" style="margin-top: 8px"><div><img src="${first.photo}" alt="" style="width: 100%; border-radius: 8px" /><div class="sub">${esc(fmtDate(first.at.slice(0, 10)))}</div></div><div><img src="${last.photo}" alt="" style="width: 100%; border-radius: 8px" /><div class="sub">${esc(fmtDate(last.at.slice(0, 10)))}</div></div></div></div>` : ''}
+    <div class="card" style="padding: 14px; margin-top: 10px">
+      <textarea id="pj-note" rows="2" maxlength="400" placeholder="¿Cómo va? Ej: salió una raicita de 1 cm"></textarea>
+      ${pjPhoto ? `<div class="thumbs" style="margin-top: 8px"><span class="thumb"><img src="${pjPhoto}" alt="" /><button type="button" class="x" data-action="pj-rm-photo" aria-label="Quitar foto">✕</button></span></div>` : ''}
+      <input type="file" id="pj-photo-input" accept="image/*" hidden />
+      <div class="row" style="margin-top: 8px"><button class="btn secondary" data-action="pj-add-photo">📷 Foto</button><button class="btn" data-action="pj-log" data-id="${j.id}">Agregar al diario</button></div>
+    </div>
+    ${j.log.length ? j.log.map((l) => `<div class="card" style="padding: 12px; margin-top: 8px">${l.photo ? `<img src="${l.photo}" alt="" style="width: 100%; border-radius: 8px; margin-bottom: 6px" />` : ''}<div>${esc(l.text || '')}</div><div class="sub">${esc(fmtWhen(l.at))}</div></div>`).join('') : ''}
+    <div class="stack" style="margin-top: 16px">
+      <button class="btn secondary block" data-action="pj-finish" data-id="${j.id}">${j.done ? 'Reabrir proyecto' : 'Marcar como terminado'}</button>
+      <button class="btn danger block" data-action="pj-delete" data-id="${j.id}">Eliminar proyecto</button></div>`;
+}
+
+async function addPjPhoto() {
+  syncPjNote();
+  if (!isNative()) return document.getElementById('pj-photo-input')?.click();
+  try {
+    const ph = await Camera.getPhoto({
+      quality: 80, width: 1024, resultType: CameraResultType.DataUrl, source: CameraSource.Prompt,
+      promptLabelHeader: 'Foto del proyecto', promptLabelPhoto: 'Elegir de la galería',
+      promptLabelPicture: 'Sacar foto', promptLabelCancel: 'Cancelar',
+    });
+    if (ph.dataUrl) pjPhoto = await shrink(ph.dataUrl, 640);
+  } catch {
+    return;
+  }
+  rerender();
+}
+
+let pjNote = '';
+function syncPjNote() {
+  const n = document.getElementById('pj-note');
+  if (n) pjNote = n.value;
+}
+
 /* ---------- router ---------- */
 
 function render() {
@@ -1063,13 +1309,18 @@ function render() {
   } else if (name === 'novedad' && getPlant(id)) {
     if (!nov || nov.plantId !== id) nov = newNov(id);
     html = viewNovedad(getPlant(id));
+  } else if (name === 'proyecto' && id === 'nuevo') {
+    if (!pj) pj = newPj();
+    html = viewPjNew();
+  } else if (name === 'proyecto' && getProject(id)) {
+    html = viewProject(getProject(id));
   } else if (name === 'calendario') html = viewCalendar();
   else if (name === 'ajustes') html = viewSettings();
   else html = viewList();
 
   const keepScroll = window.scrollY;
   $app.innerHTML = html + soilSheet();
-  if (['new', 'edit', 'ajustes', 'novedad', 'calendario'].includes(name) && window.__keepScroll) window.scrollTo(0, keepScroll);
+  if (['new', 'edit', 'ajustes', 'novedad', 'calendario', 'proyecto'].includes(name) && window.__keepScroll) window.scrollTo(0, keepScroll);
   else window.scrollTo(0, 0);
   window.__keepScroll = false;
 }
@@ -1212,6 +1463,85 @@ $app.addEventListener('click', async (e) => {
     return doWater(id);
   }
   if (action === 'open') return go(`/p/${id}`);
+  if (action === 'open-any') return go(getProject(id) ? `/proyecto/${id}` : `/p/${id}`);
+  if (action === 'open-pj') return go(`/proyecto/${id}`);
+  if (action === 'pj-new') {
+    pj = newPj();
+    return go('/proyecto/nuevo');
+  }
+  if (action === 'pj-back') {
+    if (pj && pj.step !== 'pick') {
+      syncPj();
+      pj.step = pj.step === 'review' ? 'form' : pj.step === 'ask' ? 'form' : 'pick';
+      pj.msg = '';
+      return render();
+    }
+    pj = null;
+    return history.length > 1 ? history.back() : go('/', true);
+  }
+  if (action === 'pj-pick') {
+    const t = templateById(id);
+    pj.templateId = t ? t.id : null;
+    pj.name = t ? (t.id === 'estratificacion' ? 'Perales de semilla' : t.id === 'palta' ? 'Paltas' : t.name) : '';
+    pj.step = 'form';
+    return render();
+  }
+  if (action === 'pj-plan') return pjMakePlan();
+  if (action === 'pj-edit') {
+    syncPj();
+    pj.step = 'form';
+    pj.msg = '';
+    return render();
+  }
+  if (action === 'pj-copy') {
+    const ok = await copyText(pjPrompt());
+    return toast(ok ? 'Pedido copiado. Pegalo en Gemini.' : 'No pude copiar. Abrí "Ver el pedido" y copialo a mano.');
+  }
+  if (action === 'pj-read') {
+    syncPj();
+    const r = parsePlan(pj.raw);
+    if (!r.ok) {
+      pj.msg = r.error;
+      return render();
+    }
+    pj.plan = r.plan;
+    pj.msg = '';
+    pj.step = 'review';
+    return render();
+  }
+  if (action === 'pj-create') return pjCreate();
+  if (action === 'pj-add-photo') return addPjPhoto();
+  if (action === 'pj-rm-photo') {
+    syncPjNote();
+    pjPhoto = null;
+    return rerender();
+  }
+  if (action === 'pj-log') {
+    syncPjNote();
+    const text = pjNote.trim();
+    if (!text && !pjPhoto) return toast('Escribí algo o sumá una foto.');
+    data.projects = data.projects.map((x) => (x.id === id ? addLog(x, { type: 'nota', text, photo: pjPhoto || '' }) : x));
+    pjNote = '';
+    pjPhoto = null;
+    persist({ resched: false });
+    toast('Agregado al diario');
+    return render();
+  }
+  if (action === 'pj-finish') {
+    data.projects = data.projects.map((x) => (x.id === id ? { ...x, done: !x.done } : x));
+    persist();
+    return render();
+  }
+  if (action === 'pj-delete') {
+    const j = getProject(id);
+    if (j && confirm(`¿Eliminar "${j.name}"? Se borra también su diario.`)) {
+      data.projects = data.projects.filter((x) => x.id !== id);
+      persist();
+      toast('Proyecto eliminado');
+      return go('/', true);
+    }
+    return;
+  }
   if (action === 'new') {
     draft = null;
     return go('/new');
@@ -1396,9 +1726,14 @@ $app.addEventListener('click', async (e) => {
   }
   if (action === 'task-done' || action === 'task-del') {
     const { tid } = el.dataset;
-    data.plants = data.plants.map((x) =>
-      x.id === id ? { ...x, tasks: action === 'task-done' ? completeTask(x.tasks || [], tid) : removeTask(x.tasks || [], tid) } : x,
-    );
+    const upd = (x) => {
+      if (x.id !== id) return x;
+      const task = (x.tasks || []).find((k) => k.id === tid);
+      const next = { ...x, tasks: action === 'task-done' ? completeTask(x.tasks || [], tid) : removeTask(x.tasks || [], tid) };
+      return getProject(id) && action === 'task-done' && task ? addLog(next, { type: 'tarea', text: `✓ ${task.title}` }) : next;
+    };
+    data.plants = data.plants.map(upd);
+    data.projects = data.projects.map(upd);
     persist();
     toast(action === 'task-done' ? 'Tarea hecha ✓' : 'Tarea borrada');
     return render();
@@ -1528,6 +1863,15 @@ $app.addEventListener('change', async (e) => {
     }
     return rerender();
   }
+  if (t.id === 'pj-photo-input' && t.files[0]) {
+    try {
+      syncPjNote();
+      pjPhoto = await shrink(await fileToDataURL(t.files[0]), 640);
+      rerender();
+    } catch (err) {
+      toast(err.message);
+    }
+  }
   if (t.id === 'nov-photo-input' && t.files[0] && nov) {
     try {
       syncNov();
@@ -1622,6 +1966,7 @@ document.addEventListener('visibilitychange', () => {
   exactAlarm = await exactAlarmState();
   onNotificationTap((plantId) => {
     if (getPlant(plantId)) go(`/p/${plantId}`);
+    else if (getProject(plantId)) go(`/proyecto/${plantId}`);
   });
   const r = refreshCare(data, lookup);
   data.plants = r.plants;
