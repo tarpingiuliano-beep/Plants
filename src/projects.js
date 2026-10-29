@@ -40,7 +40,7 @@ export const TEMPLATES = [
       ],
       etapas: [
         st(0, 'Armar la bolsa en la heladera', 'Papel de cocina húmedo (escurrido), semillas separadas entre sí, bolsa casi cerrada, en un estante del medio.'),
-        st(7, 'Revisar humedad y moho', 'El papel tiene que seguir húmedo. Si hay moho, lavá la semilla y cambiá el papel. Descartá las semillas blandas.', 7, 8),
+        st(4, 'Revisar humedad y moho', 'El papel tiene que seguir húmedo. Si hay moho, lavá la semilla y cambiá el papel. Descartá las semillas blandas.', 4, 14),
         st(45, 'Mirar las semillas a fondo', 'Algunas pueden empezar a abrirse. Una raicita blanca de 1 cm o más significa que ya hay que plantarla.'),
         st(60, 'Buscar raicitas', 'Desde ahora pueden brotar. Si ves una raíz de 1 cm o más, plantala con la raíz hacia abajo, 1–2 cm de profundidad, en tierra suelta y húmeda, con luz pero sin sol fuerte las primeras semanas.', 3, 11),
         st(90, 'Fin del frío: plantar todo', 'Plantá todas las semillas, hayan brotado o no, en maceta con tierra suelta. Regá y esperá 3–4 semanas. Si ninguna brota, podés volver a ponerlas 2–3 semanas más en la heladera.'),

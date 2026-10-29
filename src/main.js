@@ -1135,6 +1135,7 @@ function viewPjNew() {
         return `<div class="card" style="padding: 14px; margin-bottom: 10px">
           <label class="check"><input type="checkbox" class="pj-chk" data-i="${i}" ${tk && st !== 'pasada' ? 'checked' : ''} ${tk ? '' : 'disabled'} /> <b>${esc(e.titulo)}</b></label>
           <div class="sub" style="margin: 4px 0">Día ${e.dia}${e.cada ? ` · cada ${e.cada} días${e.veces ? `, ${e.veces} veces` : ''}` : ''} · ${esc(when)}</div>
+          ${e.cada ? `<div class="sub" style="margin-top: 6px">Repetir cada <input type="number" class="pj-every" data-i="${i}" min="1" max="365" value="${e.cada}" style="width: 64px; display: inline-block" /> días</div>` : ''}
           <div class="sub">${esc(e.detalle)}</div></div>`;
       })
       .join('')}
@@ -1203,7 +1204,15 @@ function pjCreate() {
   const tasks = [];
   document.querySelectorAll('.pj-chk').forEach((c) => {
     if (!c.checked) return;
-    const tk = stageTask(pj.plan.etapas[Number(c.dataset.i)], pj.startDate, today, time);
+    const i = Number(c.dataset.i);
+    let e = pj.plan.etapas[i];
+    const ev = Number(document.querySelector(`.pj-every[data-i="${i}"]`)?.value);
+    if (e.cada && Number.isFinite(ev) && ev >= 1 && ev !== e.cada) {
+      const span = e.veces ? e.cada * (e.veces - 1) : null;
+      e = { ...e, cada: Math.round(ev), veces: span === null ? null : Math.max(1, Math.round(span / ev) + 1) };
+      pj.plan.etapas[i] = e;
+    }
+    const tk = stageTask(e, pj.startDate, today, time);
     if (tk) tasks.push(tk);
   });
   const t = templateById(pj.templateId);
