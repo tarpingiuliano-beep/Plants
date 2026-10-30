@@ -5,6 +5,7 @@ import { defaultState, loadAsync, save, flushNow, setSaveErrorHandler } from './
 import { buildBackup, backupFileName, parseBackup, summarize, replaceWith, mergeWith, needsBackupReminder, lastBackupText } from './backup.js';
 import { refreshCare } from './migrate.js';
 import { askCare, askExtra, askJson, testGeminiKey } from './ai.js';
+import { monthStartOf, isHidden, applyFeedback, buildFeedbackPrompt, parseFeedback, GENERIC_GUIDES, guideKindOf, buildGuidePrompt, parseGuide, startGuide, advanceGuide, retryStep, cancelGuide } from './guia.js';
 import { TEMPLATES, templateById, buildPlanPrompt, parsePlan, stageTask, stageState, stageEnd, createProject, projectProgress, addLog } from './projects.js';
 import { MONTHS, eventsOf, eventsInMonth, digestText, buildMonthlyDigests, monthsText } from './extras.js';
 import { shareTextFile, copyText, sharePhotosWithText } from './files.js';
@@ -108,6 +109,7 @@ const go = (path, replace = false) => {
 
 const getPlant = (id) => data.plants.find((p) => p.id === id);
 const getProject = (id) => data.projects.find((p) => p.id === id);
+const hiddenFn = (p, ev, m) => isHidden(p, ev.kind, monthStartOf(m));
 const holders = () => [...data.plants, ...data.projects.filter((j) => !j.done)];
 const seasonOf = (p) => (p.sci ? data.species[p.sci]?.extra || null : null);
 const careOf = (p) => (p.sci ? data.species[p.sci]?.care || lookup(p.sci, p.genus, p.family) : null);
@@ -118,7 +120,7 @@ const extraAlerts = () => [
   ...buildHeatAlerts(data.plants, data.climate, careOf, placementOf),
   ...buildStormAlerts(data.plants, data.climate, placementOf),
   ...buildTaskSchedule(holders()),
-  ...(data.settings.seasonAlerts === false ? [] : buildMonthlyDigests(data.plants, seasonOf)),
+  ...(data.settings.seasonAlerts === false ? [] : buildMonthlyDigests(data.plants, seasonOf, new Date(), 12, hiddenFn)),
 ];
 
 function persist({ resched = true } = {}) {
@@ -441,7 +443,7 @@ function viewList() {
     banners.push(`<div class="banner"><span>📍 Elegí dónde vivís y ajusto el riego al clima de tu zona.</span>
       <button class="btn" data-action="settings">Elegir</button></div>`);
   }
-  const monthItems = data.settings.seasonAlerts === false ? [] : eventsInMonth(data.plants, seasonOf, thisMonth());
+  const monthItems = data.settings.seasonAlerts === false ? [] : eventsInMonth(data.plants, seasonOf, thisMonth(), hiddenFn);
   if (monthItems.length) {
     banners.push(`<div class="banner"><span>🌿 Este mes: ${esc(digestText(monthItems))}</span>
       <button class="btn" data-action="calendar">Ver</button></div>`);
@@ -567,7 +569,13 @@ function viewDetail(p) {
             ${t.detail ? `<div class="sub">${esc(t.detail)}</div>` : ''}
             <div class="when">${esc(taskText(t, today))}</div>
             <div class="row" style="margin-top: 6px">
-              <button class="btn secondary" data-action="task-done" data-id="${p.id}" data-tid="${t.id}">✓ Hecha</button>
+              ${
+                t.recheck
+                  ? `<button class="btn secondary" data-action="rc-yes" data-id="${p.id}" data-tid="${t.id}">✓ Sí, ya se puede</button>
+              <button class="btn secondary" data-action="rc-no" data-id="${p.id}" data-tid="${t.id}">⏳ Todavía no</button>`
+                  : `<button class="btn secondary" data-action="task-done" data-id="${p.id}" data-tid="${t.id}">✓ ${t.guide ? 'Hecho' : 'Hecha'}</button>
+              ${t.retry ? `<button class="btn secondary" data-action="task-later" data-id="${p.id}" data-tid="${t.id}">⏳ Todavía no (${t.retry} d)</button>` : ''}`
+              }
               <button class="btn secondary" data-action="task-del" data-id="${p.id}" data-tid="${t.id}" aria-label="Borrar tarea">🗑</button>
             </div></div></li>`,
         )
@@ -606,6 +614,7 @@ function viewDetail(p) {
     </div>
     ${care ? `<div style="margin-top: 12px">${careCardHtml(care, placementOf(p.placement), { wiki: sp?.wiki })}</div>` : ''}
     ${seasonCardHtml(p)}
+    ${guideCardHtml(p)}
     ${tasksHtml}
     <h2>Historial</h2>
     <div class="card" style="padding: 4px 16px"><ul class="history">${hist}</ul></div>
@@ -854,7 +863,9 @@ function seasonCardHtml(p) {
   }
   const events = eventsOf(ex);
   const now = thisMonth();
-  const active = events.filter((e) => e.months.includes(now));
+  const today = dateStr();
+  const active = events.filter((e) => e.months.includes(now) && !isHidden(p, e.kind, today));
+  const paused = events.filter((e) => p.seasonLog?.[e.kind] && isHidden(p, e.kind, today));
   const abono = ex.abono?.cadaDias
     ? `<button class="btn secondary block" style="margin-top: 10px" data-action="abono-task" data-id="${p.id}">⏰ Recordarme abonar cada ${ex.abono.cadaDias} días (solo en temporada)</button>`
     : '';
@@ -862,13 +873,121 @@ function seasonCardHtml(p) {
       <div class="care-head"><b>🌱 Cuidados de temporada</b>
         <span class="sub">Gemini · seguridad ${esc(ex.confidence)}</span></div>
       <p class="sub" style="margin: 6px 0 4px">${MONTHS[now - 1][0].toUpperCase()}${MONTHS[now - 1].slice(1)}: ${active.length ? 'esto toca ahora' : 'no hay nada especial este mes'}</p>
-      ${active.map((e) => eventLine(e, true)).join('')}
+      ${active.map((e) => eventLine(e, true) + evActions(p, e)).join('')}
+      ${paused
+        .map((e) => {
+          const l = p.seasonLog[e.kind];
+          const what = l.status === 'hecho' ? 'hecho' : l.status === 'despues' ? 'todavía no' : 'este año no';
+          return `<div class="ev"><span class="sub">⏸ <b>${esc(e.label)}</b>: ${what}${l.reason ? ` (${esc(l.reason)})` : ''}. Vuelve a aparecer el ${esc(fmtDay(l.until))}.${l.queMirar ? ` Qué mirar: ${esc(l.queMirar)}` : ''}${l.ai ? ' · Gemini' : ''}</span></div>`;
+        })
+        .join('')}
+      ${p.stage ? `<p class="sub" style="margin: 6px 0 0">Etapa de la planta: <b>${esc(p.stage)}</b> (según lo que contaste)</p>` : ''}
       ${abono}
       <details style="margin-top: 10px"><summary class="sub">Todo el año, reproducción y plagas</summary>
         ${events.map((e) => eventLine(e, false)).join('')}
         ${ex.plagas.length ? `<div class="ev"><b>🐛 Plagas</b><ul class="notes">${ex.plagas.map((x) => `<li>${esc(x)}</li>`).join('')}</ul></div>` : ''}
         <p class="hint">Es una guía de una IA para tu zona: confirmá con tu planta y, ante la duda, probá en una sola rama o maceta.</p>
       </details></div>`;
+}
+
+function evActions(p, e) {
+  const gk = guideKindOf(e.kind);
+  const guiding = p.guide && !p.guide.done && p.guide.kind === gk;
+  return `<div class="row" style="margin: 6px 0 10px; flex-wrap: wrap; gap: 6px">
+    ${gk && !guiding ? `<button class="btn" data-action="guide-start" data-id="${p.id}" data-kind="${e.kind}">🧭 Guiame paso a paso</button>` : ''}
+    <button class="btn secondary" data-action="ev-done" data-id="${p.id}" data-kind="${e.kind}">✓ Lo hice</button>
+    <button class="btn secondary" data-action="ev-later" data-id="${p.id}" data-kind="${e.kind}">⏳ Todavía no</button>
+    <button class="btn secondary" data-action="ev-no" data-id="${p.id}" data-kind="${e.kind}">✗ Este año no</button></div>`;
+}
+
+function guideCardHtml(p) {
+  const g = p.guide;
+  if (!g) return '';
+  const src = g.source === 'Gemini' ? `Gemini (seguridad ${g.confidence})` : 'plantilla general de la app';
+  if (g.done) {
+    return `<div class="card" style="padding: 14px; margin-top: 12px"><b>🧭 Guía terminada: ${esc(g.label)}</b>
+      ${g.kind === 'semillas' ? `<button class="btn block" style="margin-top: 10px" data-action="guide-project" data-id="${p.id}">🌱 Armar proyecto de germinación</button>` : ''}
+      <button class="btn secondary block" style="margin-top: 8px" data-action="guide-cancel" data-id="${p.id}">Cerrar</button></div>`;
+  }
+  return `<div class="card" style="padding: 14px; margin-top: 12px"><div class="care-head"><b>🧭 En curso: ${esc(g.label)}</b><span class="sub">${esc(src)}</span></div>
+    <p class="sub" style="margin: 6px 0">Paso ${g.idx + 1} de ${g.steps.length}. Cuando termines cada uno, tocá "Hecho" en Tareas y te aviso el siguiente.</p>
+    ${g.steps.map((x, i) => `<div style="margin-bottom: 4px">${i < g.idx ? '✅' : i === g.idx ? '▶️' : '⏳'} ${esc(x.titulo)}${x.espera_dias && i >= g.idx ? ` <span class="sub">(después, esperar ${x.espera_dias} d)</span>` : ''}</div>`).join('')}
+    <button class="btn secondary block" style="margin-top: 8px" data-action="guide-cancel" data-id="${p.id}">Cancelar guía</button></div>`;
+}
+
+/* feedback de temporada (todavía no / este año no) */
+let fb = null; // { id, kind, label, status, reason, busy, result }
+
+function fbSheet() {
+  if (!fb || !getPlant(fb.id)) return '';
+  const p = getPlant(fb.id);
+  if (fb.result) {
+    const r = fb.result;
+    return `<div class="sheet"><div class="sheet-body">
+      <div class="sheet-head"><b>${esc(p.name)}: ${esc(fb.label)}</b></div>
+      ${r.resumen ? `<p style="margin: 0 0 6px">${esc(r.resumen)}</p>` : ''}
+      <p class="sub" style="margin: 0">Te lo vuelvo a proponer el <b>${esc(fmtDay(r.until))}</b>${r.ai ? ' (lo calculó Gemini con lo que escribiste)' : ''}.${r.queMirar ? ` Qué mirar: ${esc(r.queMirar)}` : ''}</p>
+      ${r.stage ? `<p class="sub" style="margin: 6px 0 0">Anoté que la planta está en etapa <b>${esc(r.stage)}</b>.</p>` : ''}
+      <button class="btn block" style="margin-top: 12px" data-action="fb-close">Listo</button></div></div>`;
+  }
+  return `<div class="sheet"><div class="sheet-body">
+      <div class="sheet-head"><b>${esc(p.name)}: ${esc(fb.label)}</b><button class="icon-btn" data-action="fb-close" aria-label="Cerrar">✕</button></div>
+      <p class="sub" style="margin: 0 0 6px">${fb.status === 'despues' ? 'Todavía no.' : 'Este año no.'} ¿Por qué? ${hasGemini() ? 'Gemini lo lee y decide cuándo volver a preguntarte.' : 'Sin clave de Gemini uso un plazo estándar, pero igual queda anotado.'}</p>
+      <textarea id="fb-reason" rows="3" maxlength="300" placeholder="Ej: la planta es chica, todavía no tiene el tamaño" ${fb.busy ? 'disabled' : ''}>${esc(fb.reason)}</textarea>
+      <button class="btn block" style="margin-top: 10px" data-action="fb-send" ${fb.busy ? 'disabled' : ''}>${fb.busy ? 'Pensando…' : 'Guardar'}</button></div></div>`;
+}
+
+async function ensureModel() {
+  if (data.keys.gemini && !data.keys.geminiModel) {
+    const t = await testGeminiKey(data.keys.gemini);
+    if (t.ok) data.keys.geminiModel = t.model;
+  }
+  return !!(data.keys.gemini && data.keys.geminiModel);
+}
+
+async function submitFb() {
+  const p0 = getPlant(fb.id);
+  fb.reason = document.getElementById('fb-reason')?.value || fb.reason;
+  const reason = fb.reason.trim();
+  const ex = seasonOf(p0);
+  fb.busy = true;
+  render();
+  let ai = null;
+  if (reason && data.keys.gemini && online() && (await ensureModel())) {
+    const r = await askJson(buildFeedbackPrompt({ plant: p0, sci: p0.sci, label: fb.label, status: fb.status, reason, stage: p0.stage, place: data.place }), data.keys.gemini, data.keys.geminiModel);
+    if (r.text) ai = parseFeedback(r.text);
+    else if (/ 404/.test(r.error || '')) data.keys.geminiModel = '';
+  }
+  let after = applyFeedback(p0, fb.kind, fb.label, { status: fb.status, reason, ai, extra: ex });
+  const entry = after.seasonLog[fb.kind];
+  if (fb.status === 'despues' && entry.days <= 120) {
+    after = { ...after, tasks: [...(after.tasks || []).filter((t) => t.recheck !== fb.kind), { ...makeTask({ title: `¿Ya se puede? ${fb.label}`, detail: entry.queMirar || reason, due: entry.until, time: `${pad(data.settings.hour)}:${pad(data.settings.minute)}`, source: 'temporada' }), recheck: fb.kind }] };
+  }
+  data.plants = data.plants.map((x) => (x.id === p0.id ? after : x));
+  persist();
+  fb.busy = false;
+  fb.result = { until: entry.until, resumen: entry.resumen, queMirar: entry.queMirar, ai: entry.ai, stage: ai?.etapa || '' };
+  render();
+}
+
+async function startGuideFlow(id, evKind) {
+  const p = getPlant(id);
+  const ex = p && seasonOf(p);
+  const ev = ex && eventsOf(ex).find((e) => e.kind === evKind);
+  const gk = guideKindOf(evKind);
+  if (!p || !ev || !gk) return;
+  let guide = { ...GENERIC_GUIDES[gk], source: 'plantilla', confidence: null };
+  if (data.keys.gemini && online() && (await ensureModel())) {
+    toast('Armando la guía…');
+    const r = await askJson(buildGuidePrompt({ kind: gk, plant: p, sci: p.sci, hints: ev.steps, place: data.place }), data.keys.gemini, data.keys.geminiModel);
+    const g = r.text && parseGuide(r.text);
+    if (g) guide = g;
+    else if (/ 404/.test(r.error || '')) data.keys.geminiModel = '';
+  }
+  data.plants = data.plants.map((x) => (x.id === id ? startGuide(x, gk, ev.label, guide, `${pad(data.settings.hour)}:${pad(data.settings.minute)}`) : x));
+  persist();
+  toast(guide.source === 'Gemini' ? 'Guía armada por Gemini 🧭' : 'Guía lista (plantilla general) 🧭');
+  render();
 }
 
 function eventLine(e, open) {
@@ -883,7 +1002,7 @@ function viewCalendar() {
   const withData = data.plants.filter((p) => seasonOf(p)).length;
   const blocks = months
     .map((m, k) => {
-      const items = eventsInMonth(data.plants, seasonOf, m);
+      const items = eventsInMonth(data.plants, seasonOf, m, hiddenFn);
       const by = new Map();
       for (const { plant, event } of items) {
         if (!by.has(event.label)) by.set(event.label, { icon: event.icon, plants: [] });
@@ -1328,7 +1447,7 @@ function render() {
   else html = viewList();
 
   const keepScroll = window.scrollY;
-  $app.innerHTML = html + soilSheet();
+  $app.innerHTML = html + soilSheet() + fbSheet();
   if (['new', 'edit', 'ajustes', 'novedad', 'calendario', 'proyecto'].includes(name) && window.__keepScroll) window.scrollTo(0, keepScroll);
   else window.scrollTo(0, 0);
   window.__keepScroll = false;
@@ -1645,6 +1764,63 @@ $app.addEventListener('click', async (e) => {
   }
 
   if (action === 'calendar') return go('/calendario');
+  if (action === 'ev-done') {
+    const label = eventsOf(seasonOf(getPlant(id)) || {}).find((e) => e.kind === el.dataset.kind)?.label || el.dataset.kind;
+    data.plants = data.plants.map((x) => (x.id === id ? applyFeedback(x, el.dataset.kind, label, { status: 'hecho', extra: seasonOf(x) }) : x));
+    persist();
+    toast('Anotado ✓ — no te lo vuelvo a pedir por ahora');
+    return render();
+  }
+  if (action === 'ev-later' || action === 'ev-no') {
+    const label = eventsOf(seasonOf(getPlant(id)) || {}).find((e) => e.kind === el.dataset.kind)?.label || el.dataset.kind;
+    fb = { id, kind: el.dataset.kind, label, status: action === 'ev-later' ? 'despues' : 'no', reason: '', busy: false, result: null };
+    return render();
+  }
+  if (action === 'fb-send') return submitFb();
+  if (action === 'fb-close') {
+    fb = null;
+    return render();
+  }
+  if (action === 'rc-yes') {
+    const t = (getPlant(id)?.tasks || []).find((k) => k.id === el.dataset.tid);
+    data.plants = data.plants.map((x) =>
+      x.id === id ? { ...x, tasks: removeTask(x.tasks || [], el.dataset.tid), seasonLog: Object.fromEntries(Object.entries(x.seasonLog || {}).filter(([k]) => k !== t?.recheck)) } : x,
+    );
+    persist();
+    toast('Listo: vuelve a aparecer en los cuidados de esta planta');
+    return render();
+  }
+  if (action === 'rc-no') {
+    const p = getPlant(id);
+    const t = (p?.tasks || []).find((k) => k.id === el.dataset.tid);
+    if (!t) return;
+    const label = eventsOf(seasonOf(p) || {}).find((e) => e.kind === t.recheck)?.label || t.recheck;
+    data.plants = data.plants.map((x) => (x.id === id ? { ...x, tasks: removeTask(x.tasks || [], t.id) } : x));
+    fb = { id, kind: t.recheck, label, status: 'despues', reason: '', busy: false, result: null };
+    return render();
+  }
+  if (action === 'task-later') {
+    data.plants = data.plants.map((x) => (x.id === id ? retryStep(x, el.dataset.tid) : x));
+    persist();
+    toast('Te vuelvo a preguntar más adelante');
+    return render();
+  }
+  if (action === 'guide-start') return startGuideFlow(id, el.dataset.kind);
+  if (action === 'guide-cancel') {
+    data.plants = data.plants.map((x) => (x.id === id ? cancelGuide(x) : x));
+    persist();
+    return render();
+  }
+  if (action === 'guide-project') {
+    const p = getPlant(id);
+    pj = newPj();
+    pj.step = 'form';
+    pj.name = `Semillas de ${p.name}`;
+    pj.description = `Germinar las semillas de ${p.name}${p.sci ? ` (${p.sci})` : ''} que acabo de cosechar y secar.`;
+    data.plants = data.plants.map((x) => (x.id === id ? cancelGuide(x) : x));
+    persist();
+    return go('/proyecto/nuevo');
+  }
   if (action === 'abono-task') {
     const p = getPlant(id);
     const ex = p && seasonOf(p);
@@ -1738,6 +1914,7 @@ $app.addEventListener('click', async (e) => {
     const upd = (x) => {
       if (x.id !== id) return x;
       const task = (x.tasks || []).find((k) => k.id === tid);
+      if (action === 'task-done' && task?.guide) return advanceGuide(x, tid, `${pad(data.settings.hour)}:${pad(data.settings.minute)}`);
       const next = { ...x, tasks: action === 'task-done' ? completeTask(x.tasks || [], tid) : removeTask(x.tasks || [], tid) };
       return getProject(id) && action === 'task-done' && task ? addLog(next, { type: 'tarea', text: `✓ ${task.title}` }) : next;
     };

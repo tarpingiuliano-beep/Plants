@@ -35,11 +35,11 @@ export function eventsOf(extra) {
 }
 
 /** Eventos que caen en un mes (1-12) para todas las plantas. */
-export function eventsInMonth(plants, getExtra, month) {
+export function eventsInMonth(plants, getExtra, month, hidden = null) {
   const out = [];
   for (const p of plants) {
     for (const ev of eventsOf(getExtra(p))) {
-      if (ev.months.includes(month)) out.push({ plant: p, event: ev });
+      if (ev.months.includes(month) && !(hidden && hidden(p, ev, month))) out.push({ plant: p, event: ev });
     }
   }
   return out;
@@ -59,13 +59,13 @@ export function digestText(items) {
  * Un aviso por mes (el día 1 a las 10:00) con lo que toca ese mes, para los próximos 12 meses.
  * Ids 900301+. Si no hay nada ese mes, no hay aviso.
  */
-export function buildMonthlyDigests(plants, getExtra, now = new Date(), horizon = 12) {
+export function buildMonthlyDigests(plants, getExtra, now = new Date(), horizon = 12, hidden = null) {
   const out = [];
   for (let k = 0; k < horizon; k++) {
     const d = new Date(now.getFullYear(), now.getMonth() + k, 1);
     const at = atTime(dateStr(d), 10, 0);
     if (at <= now) continue;
-    const items = eventsInMonth(plants, getExtra, d.getMonth() + 1);
+    const items = eventsInMonth(plants, getExtra, d.getMonth() + 1, hidden);
     if (!items.length) continue;
     out.push({
       id: 900301 + k,
