@@ -217,13 +217,13 @@ export async function askExtra(ctx, key, model) {
 
 
 /** Pide a Gemini una respuesta JSON para un texto cualquiera. { text } o { error, quota } */
-export async function askJson(prompt, key, model) {
+export async function askJson(prompt, key, model, images = []) {
   try {
     const res = await fetch(`${BASE}/models/${model}:generateContent`, {
       method: 'POST',
       headers: { 'x-goog-api-key': key, 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        contents: [{ parts: [{ text: prompt }] }],
+        contents: [{ parts: [{ text: prompt }, ...images.map(imagePart).filter(Boolean)] }],
         generationConfig: { responseMimeType: 'application/json', temperature: 0.3 },
       }),
     });
@@ -238,3 +238,10 @@ export async function askJson(prompt, key, model) {
     return { error: 'No pude conectarme con Google.' };
   }
 }
+
+/** data URL → parte "inline_data" de Gemini (o null si no es una imagen). */
+function imagePart(dataUrl) {
+  const m = /^data:(image\/[a-z+.-]+);base64,(.+)$/i.exec(String(dataUrl || ''));
+  return m ? { inline_data: { mime_type: m[1], data: m[2] } } : null;
+}
+export { imagePart };

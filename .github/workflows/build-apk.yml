@@ -7,6 +7,8 @@ on:
 
 permissions:
   contents: write
+  pages: write
+  id-token: write
 
 jobs:
   build:
@@ -37,6 +39,11 @@ jobs:
         run: npm run build
         env:
           BUILD_NUMBER: ${{ github.run_number }}
+
+      - name: Guardar la web para publicarla en GitHub Pages
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
 
       - name: Crear proyecto Android
         run: npx cap add android
@@ -93,15 +100,50 @@ jobs:
           echo "Del APK:  $ACTUAL"
           [ -n "$EXPECTED" ] && [ "$EXPECTED" = "$ACTUAL" ] || { echo "La firma del APK no coincide"; exit 1; }
 
+      - name: Compilar APK en línea (abre la app desde GitHub Pages y se actualiza sola)
+        run: |
+          node -e "const fs=require('fs');const c=JSON.parse(fs.readFileSync('capacitor.config.json','utf8'));c.server={url:'https://tarpingiuliano-beep.github.io/Plants/',cleartext:false};fs.writeFileSync('capacitor.config.json',JSON.stringify(c,null,2))"
+          npx cap sync android
+          grep -q 'github.io/Plants' android/app/src/main/assets/capacitor.config.json || { echo "No quedó la dirección en línea"; exit 1; }
+          grep -q '"CapacitorHttp"' android/app/src/main/assets/capacitor.config.json || { echo "CapacitorHttp no quedó activado"; exit 1; }
+          cd android && ./gradlew assembleDebug --no-daemon
+          cp app/build/outputs/apk/debug/app-debug.apk ../plantas-online.apk
+
+      - name: Verificar la firma del APK en línea
+        run: |
+          EXPECTED=$(keytool -list -v -keystore signing/debug.keystore -storepass android -alias androiddebugkey | grep "SHA256:" | head -1 | awk '{print $2}')
+          ACTUAL=$(keytool -printcert -jarfile plantas-online.apk | grep "SHA256:" | head -1 | awk '{print $2}')
+          [ -n "$EXPECTED" ] && [ "$EXPECTED" = "$ACTUAL" ] || { echo "La firma del APK en línea no coincide"; exit 1; }
+
       - uses: actions/upload-artifact@v4
         with:
           name: plantas-apk
-          path: plantas.apk
+          path: |
+            plantas.apk
+            plantas-online.apk
 
       - name: Publicar release con el APK
         uses: softprops/action-gh-release@v2
         with:
           tag_name: build-${{ github.run_number }}
           name: Plantas build ${{ github.run_number }}
-          body: APK de prueba. Descargalo desde el celular e instalalo.
-          files: plantas.apk
+          body: |
+            plantas.apk = versión de siempre (se actualiza instalando un APK nuevo).
+            plantas-online.apk = abre la app desde https://tarpingiuliano-beep.github.io/Plants/ y se actualiza sola. Requiere GitHub Pages activado. Al cambiar de una a otra hay que pasar los datos con un respaldo.
+          files: |
+            plantas.apk
+            plantas-online.apk
+
+  deploy-web:
+    needs: build
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/configure-pages@v5
+        with:
+          enablement: true
+      - id: deploy
+        uses: actions/deploy-pages@v4

@@ -1178,7 +1178,7 @@ async function saveNov(withTasks) {
 /* ---------- proyectos ---------- */
 
 let pj = null; // asistente de "Nuevo proyecto"
-const newPj = () => ({ step: 'pick', templateId: null, bonsai: false, name: '', startDate: dateStr(), description: '', raw: '', plan: null, msg: '', busy: false });
+const newPj = () => ({ photos: [], rescue: false, step: 'pick', templateId: null, bonsai: false, name: '', startDate: dateStr(), description: '', raw: '', plan: null, msg: '', busy: false });
 
 function projectsListHtml() {
   const today = dateStr();
@@ -1204,6 +1204,7 @@ function viewPjNew() {
   if (pj.step === 'pick') {
     return `${head}<p class="sub">¿Qué querés hacer?</p>
       ${TEMPLATES.map((t) => `<div class="card plant-card" data-action="pj-pick" data-id="${t.id}"><div class="thumb">${t.icon}</div><div class="info"><div class="name">${esc(t.name)}</div><div class="sub">${esc(t.desc)}</div></div></div>`).join('')}
+      <div class="card plant-card" data-action="pj-pick" data-id="rescate"><div class="thumb">🩺</div><div class="info"><div class="name">Rescatar una planta</div><div class="sub">Le sacás fotos y la IA identifica el problema y arma un plan de recuperación.</div></div></div>
       <div class="card plant-card" data-action="pj-pick" data-id="custom"><div class="thumb">✨</div><div class="info"><div class="name">Otro proyecto, a medida</div><div class="sub">Me contás qué querés hacer y armo el plan con Gemini.</div></div></div>`;
   }
   if (pj.step === 'form') {
@@ -1215,8 +1216,12 @@ function viewPjNew() {
       <input id="pj-start" type="date" value="${esc(pj.startDate)}" />
       <p class="hint">Puede ser una fecha pasada si ya empezaste: voy a saltear lo que ya quedó atrás.</p>
       ${t ? t.options.map((o) => `<label class="check" style="margin-top: 10px"><input type="checkbox" id="pj-bonsai" ${pj.bonsai ? 'checked' : ''} /> ${esc(o.label)}</label>`).join('') : `
-        <label for="pj-desc">¿Qué querés hacer y cómo?</label>
-        <textarea id="pj-desc" rows="6" maxlength="3000" placeholder="Ej: dos semillas de palta, una para bonsái y otra con alambre. Las pongo en agua con palillos…">${esc(pj.description)}</textarea>
+        <label for="pj-desc">${pj.rescue ? '¿Qué le pasa a la planta?' : '¿Qué querés hacer y cómo?'}</label>
+        <textarea id="pj-desc" rows="6" maxlength="3000" placeholder="${pj.rescue ? 'Ej: se le caen las hojas de abajo y el tallo está blando. La riego cada 3 días…' : 'Ej: dos semillas de palta, una para bonsái y otra con alambre. Las pongo en agua con palillos…'}">${esc(pj.description)}</textarea>
+        <div class="thumbs" style="margin-top: 10px">${pj.photos.map((x, i) => `<span class="thumb"><img src="${x}" alt="" /><button type="button" class="x" data-action="pj-ph-rm" data-i="${i}" aria-label="Quitar foto">✕</button></span>`).join('')}</div>
+        ${pj.photos.length < 3 ? `<button class="btn secondary block" style="margin-top: 10px" data-action="pj-ph-add">📷 Agregar foto (${pj.photos.length}/3)</button>` : ''}
+        <input type="file" id="pj-photos-input" accept="image/*" hidden />
+        <p class="hint">${pj.rescue ? 'Las fotos ayudan mucho: sacá la planta entera y de cerca las hojas o el tallo afectados. ' : 'Sumá fotos de lo que viste o querés replicar. '}${hasGemini() ? 'Si las usás, se envían a Google (Gemini): te aviso antes de mandarlas.' : 'Sin clave, las compartís vos con Gemini.'}</p>
         <p class="hint">Podés pegar el método que encontraste. ${hasGemini() ? 'Gemini arma el plan con fechas.' : 'Sin clave de Gemini te preparo un pedido para llevar a Gemini y traer la respuesta.'}</p>`}
       ${pj.msg ? `<p class="status warn" style="margin-top: 10px">${esc(pj.msg)}</p>` : ''}
       <button class="btn block" style="margin-top: 12px" data-action="pj-plan" ${pj.busy ? 'disabled' : ''}>${pj.busy ? 'Armando el plan…' : t ? 'Ver el plan' : hasGemini() ? 'Armar el plan con Gemini' : 'Armar el pedido'}</button>
@@ -1225,7 +1230,8 @@ function viewPjNew() {
   if (pj.step === 'ask') {
     return `${head}<div class="card" style="padding: 16px">
       <b>1. Llevalo a Gemini</b>
-      <button class="btn block" style="margin-top: 10px" data-action="pj-copy">📋 Copiar el pedido</button>
+      ${pj.photos.length ? '<button class="btn block" style="margin-top: 10px" data-action="pj-share">📤 Compartir fotos y pedido</button>' : ''}
+      <button class="btn ${pj.photos.length ? 'secondary ' : ''}block" style="margin-top: 10px" data-action="pj-copy">📋 Copiar el pedido</button>
       <details style="margin-top: 10px"><summary class="sub">Ver el pedido</summary><textarea rows="8" readonly>${esc(pjPrompt())}</textarea></details></div>
       <div class="card" style="padding: 16px; margin-top: 12px"><b>2. Traé la respuesta</b>
       <textarea id="pj-raw" rows="6" placeholder="Pegá la respuesta de Gemini">${esc(pj.raw)}</textarea>
@@ -1240,6 +1246,7 @@ function viewPjNew() {
   const srcText = plan.source === 'Gemini' ? `armado por Gemini (seguridad ${plan.confidence})` : 'plantilla general de la app, no una consulta a una IA';
   return `${head}<div class="card" style="padding: 16px">
       <b>${esc(pj.name)}</b> <span class="sub">· ${esc(srcText)}</span>
+      ${plan.diagnostico ? `<p style="margin: 8px 0 0">🩺 <b>${esc(plan.diagnostico)}</b></p>` : ''}
       ${plan.resumen ? `<p style="margin: 8px 0 0">${esc(plan.resumen)}</p>` : ''}
       ${plan.materiales.length ? `<p class="sub" style="margin: 8px 0 0">Necesitás: ${plan.materiales.map(esc).join(' · ')}</p>` : ''}
       ${plan.consejos.length ? `<ul class="notes">${plan.consejos.map((c) => `<li>🌱 ${esc(c)}</li>`).join('')}</ul>` : ''}
@@ -1264,7 +1271,7 @@ function viewPjNew() {
 }
 
 function pjPrompt() {
-  return buildPlanPrompt({ name: pj.name || 'Mi proyecto', description: pj.description, startDate: pj.startDate, place: data.place, climate: data.climate });
+  return buildPlanPrompt({ name: pj.name || 'Mi proyecto', description: pj.description, startDate: pj.startDate, place: data.place, climate: data.climate, photoCount: pj.photos.length, rescue: pj.rescue });
 }
 
 function syncPj() {
@@ -1288,19 +1295,20 @@ async function pjMakePlan() {
     pj.step = 'review';
     return render();
   }
-  if (!pj.description.trim()) return ((pj.msg = 'Contame qué querés hacer.'), render());
+  if (!pj.description.trim() && !pj.photos.length) return ((pj.msg = pj.rescue ? 'Contame qué le pasa o sumá una foto.' : 'Contame qué querés hacer.'), render());
   if (!hasGemini()) {
     pj.step = 'ask';
     return render();
   }
   if (!online()) return ((pj.msg = 'Necesito internet para consultar a Gemini.'), render());
+  if (pj.photos.length && !confirm(`Voy a enviar ${pj.photos.length} ${pj.photos.length === 1 ? 'foto' : 'fotos'} a Google (Gemini) para analizarlas.\n\nEn el plan gratuito, Google puede usar el contenido para mejorar sus productos y puede ser revisado por personas. No mando tu nombre ni tu ubicación exacta.\n\n¿Enviar?`)) return;
   pj.busy = true;
   render();
   if (!data.keys.geminiModel) {
     const tk = await testGeminiKey(data.keys.gemini);
     if (tk.ok) data.keys.geminiModel = tk.model;
   }
-  const r = data.keys.geminiModel ? await askJson(pjPrompt(), data.keys.gemini, data.keys.geminiModel) : { error: 'No pude validar la clave de Gemini.' };
+  const r = data.keys.geminiModel ? await askJson(pjPrompt(), data.keys.gemini, data.keys.geminiModel, pj.photos) : { error: 'No pude validar la clave de Gemini.' };
   pj.busy = false;
   if (r.error) {
     if (/ 404/.test(r.error)) data.keys.geminiModel = '';
@@ -1317,7 +1325,7 @@ async function pjMakePlan() {
   render();
 }
 
-function pjCreate() {
+async function pjCreate() {
   const time = document.getElementById('pj-time')?.value || '09:00';
   const today = dateStr();
   const tasks = [];
@@ -1335,7 +1343,9 @@ function pjCreate() {
     if (tk) tasks.push(tk);
   });
   const t = templateById(pj.templateId);
-  const proj = createProject({ name: pj.name, templateId: pj.templateId, description: pj.description, startDate: pj.startDate, plan: pj.plan, icon: t?.icon || '🌱', tasks });
+  const proj0 = createProject({ name: pj.name, templateId: pj.templateId, description: pj.description, startDate: pj.startDate, plan: pj.plan, icon: t?.icon || (pj.rescue ? '🩺' : '🌱'), tasks });
+  let proj = proj0;
+  for (const ph of pj.photos) proj = addLog(proj, { type: 'nota', text: 'Estado inicial', photo: await shrink(ph, 640) });
   data.projects = [...data.projects, proj];
   persist();
   pj = null;
@@ -1344,6 +1354,21 @@ function pjCreate() {
 }
 
 let pjPhoto = null; // foto del diario en preparación (data URL)
+
+async function addPjWizardPhoto() {
+  if (pj.photos.length >= 3) return;
+  if (!isNative()) return document.getElementById('pj-photos-input')?.click();
+  try {
+    const ph = await Camera.getPhoto({
+      quality: 80, width: 1024, resultType: CameraResultType.DataUrl, source: CameraSource.Prompt,
+      promptLabelHeader: 'Foto', promptLabelPhoto: 'Elegir de la galería', promptLabelPicture: 'Sacar foto', promptLabelCancel: 'Cancelar',
+    });
+    if (ph.dataUrl) pj.photos.push(await shrink(ph.dataUrl, 900));
+  } catch {
+    return;
+  }
+  rerender();
+}
 
 function viewProject(j) {
   const today = dateStr();
@@ -1358,6 +1383,7 @@ function viewProject(j) {
       <b>${j.done ? 'Proyecto terminado' : pr.notStarted ? `Empieza el ${esc(fmtDate(j.startDate))}` : `Día ${pr.day}${pr.total ? ` de ${pr.total}` : ''}`}</b>
       ${pr.total ? `<div class="bar" style="height: 8px; border-radius: 4px; background: rgba(127,127,127,.25); margin: 8px 0"><div style="height: 100%; width: ${pr.pct}%; border-radius: 4px; background: var(--accent, #2e7d32)"></div></div>` : ''}
       <div class="sub">Desde el ${esc(fmtDate(j.startDate))} · plan: ${esc(src)}</div>
+      ${j.plan.diagnostico ? `<p style="margin: 8px 0 0">🩺 <b>${esc(j.plan.diagnostico)}</b></p>` : ''}
       ${j.plan.resumen ? `<p style="margin: 8px 0 0">${esc(j.plan.resumen)}</p>` : ''}
       <details style="margin-top: 8px"><summary class="sub">Materiales, consejos y alertas</summary>
         ${j.plan.materiales.length ? `<p class="sub">Necesitás: ${j.plan.materiales.map(esc).join(' · ')}</p>` : ''}
@@ -1397,6 +1423,7 @@ function viewProject(j) {
     ${j.log.length ? j.log.map((l) => `<div class="card" style="padding: 12px; margin-top: 8px">${l.photo ? `<img src="${l.photo}" alt="" style="width: 100%; border-radius: 8px; margin-bottom: 6px" />` : ''}<div>${esc(l.text || '')}</div><div class="sub">${esc(fmtWhen(l.at))}</div></div>`).join('') : ''}
     <div class="stack" style="margin-top: 16px">
       <button class="btn secondary block" data-action="pj-finish" data-id="${j.id}">${j.done ? 'Reabrir proyecto' : 'Marcar como terminado'}</button>
+      <button class="btn secondary block" data-action="pj-copy-proj" data-id="${j.id}">Usar como base de un proyecto nuevo</button>
       <button class="btn danger block" data-action="pj-delete" data-id="${j.id}">Eliminar proyecto</button></div>`;
 }
 
@@ -1607,10 +1634,41 @@ $app.addEventListener('click', async (e) => {
     pj = null;
     return history.length > 1 ? history.back() : go('/', true);
   }
+  if (action === 'pj-ph-add') {
+    syncPj();
+    return addPjWizardPhoto();
+  }
+  if (action === 'pj-ph-rm') {
+    syncPj();
+    pj.photos.splice(Number(i), 1);
+    return rerender();
+  }
+  if (action === 'pj-share') {
+    syncPj();
+    try {
+      const r = await sharePhotosWithText(pjPrompt(), pj.photos, 'Proyecto de plantas');
+      if (r === 'unsupported') toast('Compartir funciona en la app de Android. Usá “Copiar el pedido”.');
+    } catch {
+      toast('No pude compartir. Probá con “Copiar el pedido”.');
+    }
+    return;
+  }
+  if (action === 'pj-copy-proj') {
+    const j = getProject(id);
+    if (!j) return;
+    pj = newPj();
+    pj.step = 'form';
+    pj.templateId = j.templateId;
+    pj.name = `${j.name} (2)`;
+    pj.description = j.description || '';
+    pj.rescue = j.icon === '🩺';
+    return go('/proyecto/nuevo');
+  }
   if (action === 'pj-pick') {
     const t = templateById(id);
+    pj.rescue = id === 'rescate';
     pj.templateId = t ? t.id : null;
-    pj.name = t ? (t.id === 'estratificacion' ? 'Perales de semilla' : t.id === 'palta' ? 'Paltas' : t.name) : '';
+    pj.name = t ? (t.id === 'estratificacion' ? 'Perales de semilla' : t.id === 'palta' ? 'Paltas' : t.name) : pj.rescue ? 'Rescate de ' : '';
     pj.step = 'form';
     return render();
   }
@@ -2049,6 +2107,15 @@ $app.addEventListener('change', async (e) => {
     }
     return rerender();
   }
+  if (t.id === 'pj-photos-input' && t.files[0] && pj) {
+    try {
+      syncPj();
+      pj.photos.push(await shrink(await fileToDataURL(t.files[0]), 900));
+      rerender();
+    } catch (err) {
+      toast(err.message);
+    }
+  }
   if (t.id === 'pj-photo-input' && t.files[0]) {
     try {
       syncPjNote();
@@ -2144,6 +2211,12 @@ document.addEventListener('visibilitychange', () => {
   data = await loadAsync();
   try {
     navigator.storage?.persist?.(); // pide que Android no borre los datos si falta espacio
+  } catch {
+    /* no pasa nada */
+  }
+  try {
+    // versión en línea (GitHub Pages): copia sin conexión; la app empaquetada no lo necesita
+    if ('serviceWorker' in navigator && location.hostname.endsWith('github.io')) navigator.serviceWorker.register('./sw.js').catch(() => {});
   } catch {
     /* no pasa nada */
   }

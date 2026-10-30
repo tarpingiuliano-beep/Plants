@@ -78,8 +78,11 @@ export const templateById = (id) => TEMPLATES.find((t) => t.id === id);
 
 /* ---------- Plan a medida con IA ---------- */
 
-export function buildPlanPrompt({ name, description, startDate, today = dateStr(), place, climate, now = new Date() }) {
-  return `Sos un experto en jardinería, germinación de semillas y bonsái. Quiero armar un proyecto con un plan de etapas y seguimientos con fechas.
+export function buildPlanPrompt({ name, description, startDate, today = dateStr(), place, climate, now = new Date(), photoCount = 0, rescue = false }) {
+  const intro = rescue
+    ? 'Sos un experto en jardinería y en rescate de plantas enfermas. Tengo una planta con problemas y quiero un plan de recuperación con etapas y seguimientos con fechas.'
+    : 'Sos un experto en jardinería, germinación de semillas y bonsái. Quiero armar un proyecto con un plan de etapas y seguimientos con fechas.';
+  return `${intro}${photoCount ? `\n\nTe adjunto ${photoCount} ${photoCount === 1 ? 'foto' : 'fotos'}: ${rescue ? 'mirá la planta y decime qué problema tiene' : 'son de referencia (algo que vi o quiero replicar, o mi punto de partida)'}.` : ''}
 
 - Proyecto: ${name}
 - Fecha de inicio: ${startDate}${startDate < today ? ` (ya empezó; hoy es ${today})` : ''}
@@ -90,6 +93,7 @@ ${description.trim() || '(sin descripción)'}
 Respondé SOLO con un JSON con esta forma:
 {
   "resumen": "de qué trata el plan, en 1 o 2 oraciones",
+  "diagnostico": "solo si es un rescate o hay fotos de una planta: qué le pasa y causa probable (o null)",
   "materiales": ["lista corta"],
   "consejos": ["hasta 5 consejos concretos"],
   "alertas": ["señales de que algo sale mal y qué hacer, hasta 4"],
@@ -124,6 +128,7 @@ export function parsePlan(raw) {
     ok: true,
     plan: {
       resumen: text(j.resumen, 400),
+      diagnostico: text(j.diagnostico, 400),
       materiales: lines(j.materiales, 10, 100),
       consejos: lines(j.consejos, 6),
       alertas: lines(j.alertas, 5),
