@@ -139,7 +139,7 @@ export function parseGuide(raw) {
   const pasos = j.pasos
     .map((p) => ({
       titulo: t(p?.titulo, 80),
-      detalle: t(p?.detalle, 320),
+      detalle: t(p?.detalle, 700),
       espera_dias: Number(p?.espera_dias) >= 0 ? clampInt(Number(p.espera_dias), 0, 365) : 0,
       reintento_dias: Number(p?.reintento_dias) >= 1 ? clampInt(Number(p.reintento_dias), 1, 60) : null,
     }))

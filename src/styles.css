@@ -134,6 +134,10 @@ textarea {
 .sub {
   color: var(--muted);
   font-size: 0.88rem;
+  overflow-wrap: anywhere;
+}
+/* en las tarjetas de lista el texto largo se corta con "…"; en el resto se lee completo */
+.plant-card .info .sub {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;

@@ -118,7 +118,7 @@ export function parsePlan(raw) {
       const dia = Math.round(Number(e?.dia));
       const cada = Number(e?.cada_dias) >= 1 ? Math.min(365, Math.round(Number(e.cada_dias))) : null;
       const veces = cada && Number(e?.veces) >= 1 ? Math.min(200, Math.round(Number(e.veces))) : null;
-      return { dia: Number.isFinite(dia) ? Math.max(0, Math.min(3650, dia)) : null, titulo: text(e?.titulo, 80), detalle: text(e?.detalle, 320), cada, veces };
+      return { dia: Number.isFinite(dia) ? Math.max(0, Math.min(3650, dia)) : null, titulo: text(e?.titulo, 80), detalle: text(e?.detalle, 700), cada, veces };
     })
     .filter((e) => e.dia !== null && e.titulo)
     .sort((a, b) => a.dia - b.dia)

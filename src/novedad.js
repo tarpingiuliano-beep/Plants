@@ -107,7 +107,7 @@ export function makeTask({ title, detail = '', due, time = '09:00', every = null
     months: months && months.length ? months : null,
     id: newId(),
     title: String(title).slice(0, 80),
-    detail: String(detail).slice(0, 300),
+    detail: String(detail).slice(0, 700),
     due,
     time,
     every: every || null,
