@@ -6,7 +6,8 @@ import { buildBackup, backupFileName, parseBackup, summarize, replaceWith, merge
 import { refreshCare } from './migrate.js';
 import { askCare, askExtra, askJson, testGeminiKey } from './ai.js';
 import { monthStartOf, isHidden, applyFeedback, buildFeedbackPrompt, parseFeedback, GENERIC_GUIDES, guideKindOf, buildGuidePrompt, parseGuide, startGuide, advanceGuide, retryStep, cancelGuide } from './guia.js';
-import { TEMPLATES, templateById, buildPlanPrompt, parsePlan, stageTask, stageState, stageEnd, createProject, projectProgress, addLog } from './projects.js';
+import { TEMPLATES, templateById, buildRevisionPrompt, applyRevision, buildPlanPrompt, parsePlan, stageTask, stageState, stageEnd, createProject, projectProgress, addLog } from './projects.js';
+import { taskTime } from './novedad.js';
 import { MONTHS, eventsOf, eventsInMonth, digestText, buildMonthlyDigests, monthsText } from './extras.js';
 import { shareTextFile, copyText, sharePhotosWithText } from './files.js';
 import {
@@ -109,6 +110,7 @@ const go = (path, replace = false) => {
 
 const getPlant = (id) => data.plants.find((p) => p.id === id);
 const getProject = (id) => data.projects.find((p) => p.id === id);
+const gTime = () => `${pad(data.settings.hour)}:${pad(data.settings.minute)}`;
 const hiddenFn = (p, ev, m) => isHidden(p, ev.kind, monthStartOf(m));
 const holders = () => [...data.plants, ...data.projects.filter((j) => !j.done)];
 const seasonOf = (p) => (p.sci ? data.species[p.sci]?.extra || null : null);
@@ -119,7 +121,7 @@ const extraAlerts = () => [
   ...buildColdAlerts(data.plants, data.climate, careOf, placementOf),
   ...buildHeatAlerts(data.plants, data.climate, careOf, placementOf),
   ...buildStormAlerts(data.plants, data.climate, placementOf),
-  ...buildTaskSchedule(holders()),
+  ...buildTaskSchedule(holders(), new Date(), gTime()),
   ...(data.settings.seasonAlerts === false ? [] : buildMonthlyDigests(data.plants, seasonOf, new Date(), 12, hiddenFn)),
 ];
 
@@ -567,7 +569,8 @@ function viewDetail(p) {
           (t) => `<li><span>${taskState(t, today) === 'later' ? '🗓️' : '⏰'}</span>
             <div style="flex: 1"><div>${esc(t.title)}</div>
             ${t.detail ? `<div class="sub">${esc(t.detail)}</div>` : ''}
-            <div class="when">${esc(taskText(t, today))}</div>
+            <div class="when">${esc(taskText(t, today, gTime()))}</div>
+            ${timeEditHtml(p.id, t)}
             <div class="row" style="margin-top: 6px">
               ${
                 t.recheck
@@ -767,9 +770,9 @@ function viewSettings() {
     </div>
 
     <div class="card" style="padding: 16px; margin-top: 12px">
-      <label for="s-time" style="margin-top: 0">Hora del aviso diario</label>
+      <label for="s-time" style="margin-top: 0">Hora de todos los avisos</label>
       <input type="time" id="s-time" value="${pad(data.settings.hour)}:${pad(data.settings.minute)}" />
-      <p class="hint">Te aviso a esta hora el día que toca regar, y los 3 días siguientes si se te pasa.</p>
+      <p class="hint">Riego, tareas y proyectos salen a esta hora, y si se te pasa te insisto los 3 días siguientes. Cambiarla acá cambia todos los avisos juntos. Si alguna tarea necesita otra hora, o dos por día, se lo ponés a esa tarea. Las alertas de calor, helada y tormenta y el resumen mensual tienen su horario propio.</p>
       <p style="margin-bottom: 8px">${permText}</p>
       <div class="stack">
         ${native && perm !== 'granted' ? '<button class="btn block" data-action="ask-perm">Activar notificaciones</button>' : ''}
@@ -1108,7 +1111,6 @@ function viewNovedad(p) {
         ${a.repetir_cada_dias ? `<div class="sub">Se repite cada ${a.repetir_cada_dias} días${a.veces ? `, ${a.veces} veces` : ''}</div>` : ''}
         <div class="row" style="margin-top: 8px">
           <div><label class="sub">Dentro de (días)</label><input type="number" class="nov-days" data-i="${i}" min="0" max="365" value="${a.en_dias}" /></div>
-          <div><label class="sub">Aviso a las</label><input type="time" class="nov-time" data-i="${i}" value="${pad(data.settings.hour)}:${pad(data.settings.minute)}" /></div>
         </div></div>`,
       )
       .join('')}`
@@ -1154,8 +1156,7 @@ async function saveNov(withTasks) {
       .map((a, i) => {
         if (!document.querySelector(`.nov-chk[data-i="${i}"]`)?.checked) return null;
         const days = Number(document.querySelector(`.nov-days[data-i="${i}"]`)?.value);
-        const time = document.querySelector(`.nov-time[data-i="${i}"]`)?.value || '09:00';
-        return { ...a, en_dias: Number.isFinite(days) ? Math.max(0, Math.min(365, Math.round(days))) : a.en_dias, time };
+        return { ...a, en_dias: Number.isFinite(days) ? Math.max(0, Math.min(365, Math.round(days))) : a.en_dias };
       })
       .filter(Boolean);
   }
@@ -1178,7 +1179,7 @@ async function saveNov(withTasks) {
 /* ---------- proyectos ---------- */
 
 let pj = null; // asistente de "Nuevo proyecto"
-const newPj = () => ({ photos: [], rescue: false, step: 'pick', templateId: null, bonsai: false, name: '', startDate: dateStr(), description: '', raw: '', plan: null, msg: '', busy: false });
+const newPj = () => ({ updateId: null, photos: [], rescue: false, step: 'pick', templateId: null, bonsai: false, name: '', startDate: dateStr(), description: '', raw: '', plan: null, msg: '', busy: false });
 
 function projectsListHtml() {
   const today = dateStr();
@@ -1210,13 +1211,13 @@ function viewPjNew() {
   if (pj.step === 'form') {
     const t = templateById(pj.templateId);
     return `${head}<div class="card" style="padding: 16px">
-      <label for="pj-name" style="margin-top: 0">Nombre</label>
+      ${pj.updateId ? `<b>${esc(pj.name)}</b><p class="sub" style="margin: 4px 0 0">Contale a Gemini qué cambió o qué descubriste. Arma un plan nuevo desde hoy, conserva tu diario y reemplaza los avisos pendientes por los que elijas.</p>` : `<label for="pj-name" style="margin-top: 0">Nombre</label>
       <input id="pj-name" maxlength="60" value="${esc(pj.name)}" placeholder="Ej: Perales de semilla" />
       <label for="pj-start">Fecha de inicio</label>
       <input id="pj-start" type="date" value="${esc(pj.startDate)}" />
-      <p class="hint">Puede ser una fecha pasada si ya empezaste: voy a saltear lo que ya quedó atrás.</p>
+      <p class="hint">Puede ser una fecha pasada si ya empezaste: voy a saltear lo que ya quedó atrás.</p>`}
       ${t ? t.options.map((o) => `<label class="check" style="margin-top: 10px"><input type="checkbox" id="pj-bonsai" ${pj.bonsai ? 'checked' : ''} /> ${esc(o.label)}</label>`).join('') : `
-        <label for="pj-desc">${pj.rescue ? '¿Qué le pasa a la planta?' : '¿Qué querés hacer y cómo?'}</label>
+        <label for="pj-desc">${pj.updateId ? '¿Qué cambió o qué sabés ahora?' : pj.rescue ? '¿Qué le pasa a la planta?' : '¿Qué querés hacer y cómo?'}</label>
         <textarea id="pj-desc" rows="6" maxlength="3000" placeholder="${pj.rescue ? 'Ej: se le caen las hojas de abajo y el tallo está blando. La riego cada 3 días…' : 'Ej: dos semillas de palta, una para bonsái y otra con alambre. Las pongo en agua con palillos…'}">${esc(pj.description)}</textarea>
         <div class="thumbs" style="margin-top: 10px">${pj.photos.map((x, i) => `<span class="thumb"><img src="${x}" alt="" /><button type="button" class="x" data-action="pj-ph-rm" data-i="${i}" aria-label="Quitar foto">✕</button></span>`).join('')}</div>
         ${pj.photos.length < 3 ? `<button class="btn secondary block" style="margin-top: 10px" data-action="pj-ph-add">📷 Agregar foto (${pj.photos.length}/3)</button>` : ''}
@@ -1224,7 +1225,7 @@ function viewPjNew() {
         <p class="hint">${pj.rescue ? 'Las fotos ayudan mucho: sacá la planta entera y de cerca las hojas o el tallo afectados. ' : 'Sumá fotos de lo que viste o querés replicar. '}${hasGemini() ? 'Si las usás, se envían a Google (Gemini): te aviso antes de mandarlas.' : 'Sin clave, las compartís vos con Gemini.'}</p>
         <p class="hint">Podés pegar el método que encontraste. ${hasGemini() ? 'Gemini arma el plan con fechas.' : 'Sin clave de Gemini te preparo un pedido para llevar a Gemini y traer la respuesta.'}</p>`}
       ${pj.msg ? `<p class="status warn" style="margin-top: 10px">${esc(pj.msg)}</p>` : ''}
-      <button class="btn block" style="margin-top: 12px" data-action="pj-plan" ${pj.busy ? 'disabled' : ''}>${pj.busy ? 'Armando el plan…' : t ? 'Ver el plan' : hasGemini() ? 'Armar el plan con Gemini' : 'Armar el pedido'}</button>
+      <button class="btn block" style="margin-top: 12px" data-action="pj-plan" ${pj.busy ? 'disabled' : ''}>${pj.busy ? 'Armando el plan…' : t ? 'Ver el plan' : hasGemini() ? (pj.updateId ? 'Armar el plan nuevo con Gemini' : 'Armar el plan con Gemini') : 'Armar el pedido'}</button>
     </div>`;
   }
   if (pj.step === 'ask') {
@@ -1265,12 +1266,31 @@ function viewPjNew() {
           <div class="sub">${esc(e.detalle)}</div></div>`;
       })
       .join('')}
-    <div class="row"><div><label class="sub">Hora de los avisos</label><input type="time" id="pj-time" value="${pad(data.settings.hour)}:${pad(data.settings.minute)}" /></div></div>
-    <button class="btn block" style="margin-top: 12px" data-action="pj-create">Crear proyecto</button>
+    <p class="hint">Los avisos salen a la hora general (${esc(gTime())}, se cambia en Ajustes). Después podés darle una hora propia a cada tarea.</p>
+    ${pj.updateId ? '<p class="hint">Al guardar, los avisos pendientes de este proyecto se reemplazan por los que tildaste.</p>' : ''}
+    <button class="btn block" style="margin-top: 12px" data-action="pj-create">${pj.updateId ? 'Guardar el plan actualizado' : 'Crear proyecto'}</button>
     <button class="btn secondary block" style="margin-top: 8px" data-action="pj-edit">← Volver</button>`;
 }
 
+function timeEditHtml(holderId, t) {
+  const eff = taskTime(t, gTime());
+  return `<details style="margin-top: 6px"><summary class="sub">⏰ Hora del aviso: ${esc(eff)}${t.timeCustom ? ' (propia)' : ' (general)'}${t.time2 ? ` y ${esc(t.time2)}` : ''}</summary>
+      <div class="row" style="margin-top: 6px">
+        <div><label class="sub">Hora</label><input type="time" class="t-time" data-id="${holderId}" data-tid="${t.id}" value="${esc(eff)}" /></div>
+        <div><label class="sub">Segunda hora (opcional)</label><input type="time" class="t-time2" data-id="${holderId}" data-tid="${t.id}" value="${esc(t.time2 || '')}" /></div>
+      </div>
+      <button class="btn secondary block" style="margin-top: 6px" data-action="task-time-reset" data-id="${holderId}" data-tid="${t.id}">Usar la hora general</button></details>`;
+}
+
+function patchTask(id, tid, patch) {
+  const upd = (x) => (x.id === id ? { ...x, tasks: (x.tasks || []).map((k) => (k.id === tid ? { ...k, ...patch } : k)) } : x);
+  data.plants = data.plants.map(upd);
+  data.projects = data.projects.map(upd);
+  persist();
+}
+
 function pjPrompt() {
+  if (pj.updateId && getProject(pj.updateId)) return buildRevisionPrompt({ project: getProject(pj.updateId), news: pj.description, place: data.place, photoCount: pj.photos.length });
   return buildPlanPrompt({ name: pj.name || 'Mi proyecto', description: pj.description, startDate: pj.startDate, place: data.place, climate: data.climate, photoCount: pj.photos.length, rescue: pj.rescue });
 }
 
@@ -1286,7 +1306,7 @@ function syncPj() {
 
 async function pjMakePlan() {
   syncPj();
-  if (!pj.name.trim()) return ((pj.msg = 'Ponele un nombre al proyecto.'), render());
+  if (!pj.updateId && !pj.name.trim()) return ((pj.msg = 'Ponele un nombre al proyecto.'), render());
   if (!pj.startDate) return ((pj.msg = 'Elegí la fecha de inicio.'), render());
   pj.msg = '';
   const t = templateById(pj.templateId);
@@ -1326,7 +1346,7 @@ async function pjMakePlan() {
 }
 
 async function pjCreate() {
-  const time = document.getElementById('pj-time')?.value || '09:00';
+  const time = gTime();
   const today = dateStr();
   const tasks = [];
   document.querySelectorAll('.pj-chk').forEach((c) => {
@@ -1342,6 +1362,17 @@ async function pjCreate() {
     const tk = stageTask(e, pj.startDate, today, time);
     if (tk) tasks.push(tk);
   });
+  if (pj.updateId && getProject(pj.updateId)) {
+    const id = pj.updateId;
+    const old = getProject(id);
+    let upd = applyRevision(old, pj.plan, tasks, today);
+    for (const ph of pj.photos) upd = addLog(upd, { type: 'nota', text: 'Foto para actualizar el plan', photo: await shrink(ph, 640) });
+    data.projects = data.projects.map((x) => (x.id === id ? upd : x));
+    persist();
+    pj = null;
+    toast(tasks.length ? `Plan actualizado · ${tasks.length} ${tasks.length === 1 ? 'aviso' : 'avisos'} 🔔` : 'Plan actualizado');
+    return go(`/proyecto/${id}`, true);
+  }
   const t = templateById(pj.templateId);
   const proj0 = createProject({ name: pj.name, templateId: pj.templateId, description: pj.description, startDate: pj.startDate, plan: pj.plan, icon: t?.icon || (pj.rescue ? '🩺' : '🌱'), tasks });
   let proj = proj0;
@@ -1382,7 +1413,7 @@ function viewProject(j) {
     <div class="card" style="padding: 16px">
       <b>${j.done ? 'Proyecto terminado' : pr.notStarted ? `Empieza el ${esc(fmtDate(j.startDate))}` : `Día ${pr.day}${pr.total ? ` de ${pr.total}` : ''}`}</b>
       ${pr.total ? `<div class="bar" style="height: 8px; border-radius: 4px; background: rgba(127,127,127,.25); margin: 8px 0"><div style="height: 100%; width: ${pr.pct}%; border-radius: 4px; background: var(--accent, #2e7d32)"></div></div>` : ''}
-      <div class="sub">Desde el ${esc(fmtDate(j.startDate))} · plan: ${esc(src)}</div>
+      <div class="sub">Desde el ${esc(fmtDate(j.startDate))} · plan: ${esc(src)}${(j.revisions || []).length ? ` · actualizado ${(j.revisions || []).length} ${(j.revisions || []).length === 1 ? 'vez' : 'veces'}, la última el ${esc(fmtDate(j.revisions[0].at.slice(0, 10)))}` : ''}</div>
       ${j.plan.diagnostico ? `<p style="margin: 8px 0 0">🩺 <b>${esc(j.plan.diagnostico)}</b></p>` : ''}
       ${j.plan.resumen ? `<p style="margin: 8px 0 0">${esc(j.plan.resumen)}</p>` : ''}
       <details style="margin-top: 8px"><summary class="sub">Materiales, consejos y alertas</summary>
@@ -1398,7 +1429,8 @@ function viewProject(j) {
               return `<div class="card" style="padding: 14px; margin-bottom: 10px">
               <b>${esc(t.title)}</b> <span class="chip ${late ? 'overdue' : daysBetween(today, t.due) === 0 ? 'today' : 'soon'}">${late ? 'Atrasada' : daysBetween(today, t.due) === 0 ? 'Hoy' : esc(fmtDate(t.due))}</span>
               ${t.detail ? `<div class="sub" style="margin: 4px 0 8px">${esc(t.detail)}</div>` : ''}
-              <div class="row"><button class="btn secondary" data-action="task-done" data-id="${j.id}" data-tid="${t.id}">✓ Hecha</button>
+              ${timeEditHtml(j.id, t)}
+              <div class="row" style="margin-top: 8px"><button class="btn secondary" data-action="task-done" data-id="${j.id}" data-tid="${t.id}">✓ Hecha</button>
               <button class="btn secondary" data-action="task-del" data-id="${j.id}" data-tid="${t.id}" aria-label="Borrar tarea">🗑</button></div></div>`;
             })
             .join('')
@@ -1422,6 +1454,7 @@ function viewProject(j) {
     </div>
     ${j.log.length ? j.log.map((l) => `<div class="card" style="padding: 12px; margin-top: 8px">${l.photo ? `<img src="${l.photo}" alt="" style="width: 100%; border-radius: 8px; margin-bottom: 6px" />` : ''}<div>${esc(l.text || '')}</div><div class="sub">${esc(fmtWhen(l.at))}</div></div>`).join('') : ''}
     <div class="stack" style="margin-top: 16px">
+      <button class="btn block" data-action="pj-update" data-id="${j.id}">🔄 Actualizar el plan con novedades</button>
       <button class="btn secondary block" data-action="pj-finish" data-id="${j.id}">${j.done ? 'Reabrir proyecto' : 'Marcar como terminado'}</button>
       <button class="btn secondary block" data-action="pj-copy-proj" data-id="${j.id}">Usar como base de un proyecto nuevo</button>
       <button class="btn danger block" data-action="pj-delete" data-id="${j.id}">Eliminar proyecto</button></div>`;
@@ -1663,6 +1696,22 @@ $app.addEventListener('click', async (e) => {
     pj.description = j.description || '';
     pj.rescue = j.icon === '🩺';
     return go('/proyecto/nuevo');
+  }
+  if (action === 'pj-update') {
+    const j = getProject(id);
+    if (!j) return;
+    pj = newPj();
+    pj.updateId = id;
+    pj.step = 'form';
+    pj.name = j.name;
+    pj.rescue = j.icon === '🩺';
+    pj.startDate = dateStr();
+    return go('/proyecto/nuevo');
+  }
+  if (action === 'task-time-reset') {
+    patchTask(id, el.dataset.tid, { timeCustom: false, time2: null });
+    toast('Usa la hora general');
+    return rerender();
   }
   if (action === 'pj-pick') {
     const t = templateById(id);
@@ -2106,6 +2155,16 @@ $app.addEventListener('change', async (e) => {
       backupMsg = 'No pude leer el archivo.';
     }
     return rerender();
+  }
+  if (t.classList?.contains('t-time') && t.value) {
+    patchTask(t.dataset.id, t.dataset.tid, { time: t.value, timeCustom: true });
+    toast(`Esta tarea avisa a las ${t.value}`);
+    rerender();
+  }
+  if (t.classList?.contains('t-time2')) {
+    patchTask(t.dataset.id, t.dataset.tid, { time2: t.value || null });
+    toast(t.value ? `También avisa a las ${t.value}` : 'Sin segunda hora');
+    rerender();
   }
   if (t.id === 'pj-photos-input' && t.files[0] && pj) {
     try {

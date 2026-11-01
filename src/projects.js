@@ -206,3 +206,46 @@ export function projectProgress(project, today = dateStr()) {
 export function addLog(project, entry, now = new Date()) {
   return { ...project, log: [{ at: now.toISOString(), ...entry }, ...project.log].slice(0, 300) };
 }
+
+
+/** Pedido para corregir el plan de un proyecto con información nueva. "dia" va contado desde HOY. */
+export function buildRevisionPrompt({ project, news, today = dateStr(), place, photoCount = 0 }) {
+  const done = project.plan.etapas
+    .map((e) => `- día ${e.dia}${e.cada ? ` (cada ${e.cada} días, ${e.veces || '∞'} veces)` : ''}: ${e.titulo} [${stageState(e, project.startDate, today)}]`)
+    .join('\n');
+  const diary = project.log.slice(0, 8).map((l) => `- ${l.at.slice(0, 10)}: ${l.text || '(foto)'}`).join('\n');
+  return `Sos un experto en jardinería. Estoy siguiendo un proyecto con un plan y tengo información nueva, así que hay que corregir el plan.
+
+- Proyecto: ${project.name} (empezó el ${project.startDate}; hoy es ${today})
+- Vivo en: ${place?.name || 'Argentina (hemisferio sur)'}
+${project.plan.diagnostico ? `- Diagnóstico anterior: ${project.plan.diagnostico}\n` : ''}- Plan anterior:
+${done}
+${diary ? `- Lo que anoté en el diario:\n${diary}\n` : ''}
+Información nueva que quiero que tengas en cuenta:
+${news.trim() || '(ver fotos)'}${photoCount ? `\n\nTe adjunto ${photoCount} ${photoCount === 1 ? 'foto' : 'fotos'}.` : ''}
+
+Respondé SOLO con un JSON con esta forma, con el plan completo NUEVO que reemplaza al anterior (conservá lo que sigue siendo válido y corregí lo que cambia):
+{
+  "resumen": "qué cambió respecto del plan anterior y por qué, en 1 o 2 oraciones",
+  "diagnostico": "diagnóstico actualizado (o null)",
+  "materiales": ["lista corta"],
+  "consejos": ["hasta 5 consejos concretos"],
+  "alertas": ["señales de que algo sale mal y qué hacer, hasta 4"],
+  "etapas": [ { "dia": 0, "titulo": "acción corta", "detalle": "cómo hacerla", "cada_dias": null, "veces": null } ],
+  "seguridad": "alta" | "media" | "baja"
+}
+Reglas: en este plan nuevo "dia" cuenta desde HOY (0 = hoy), no desde el inicio del proyecto. Incluí solo lo que falta hacer. Para controles periódicos usá "cada_dias" y "veces". Máximo ${MAX_STAGES} etapas, ordenadas por día. Si no estás seguro, bajá "seguridad".`;
+}
+
+/** Aplica un plan nuevo (con días contados desde hoy) a un proyecto: lo re-ancla a la fecha de inicio y reemplaza los avisos. */
+export function applyRevision(project, plan, tasks, today = dateStr(), now = new Date()) {
+  const offset = Math.max(0, daysBetween(project.startDate, today));
+  const shifted = { ...plan, etapas: plan.etapas.map((e) => ({ ...e, dia: e.dia + offset })) };
+  const next = {
+    ...project,
+    plan: shifted,
+    tasks,
+    revisions: [{ at: now.toISOString(), resumen: plan.resumen || '', diagnostico: plan.diagnostico || '', anterior: project.plan.diagnostico || '' }, ...(project.revisions || [])].slice(0, 20),
+  };
+  return addLog(next, { type: 'plan', text: `Plan actualizado${plan.diagnostico ? `: ${plan.diagnostico}` : ''}` }, now);
+}

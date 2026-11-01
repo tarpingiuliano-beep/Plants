@@ -158,11 +158,14 @@ export const taskState = (t, today = dateStr()) => {
   return d < 0 ? 'late' : d === 0 ? 'today' : 'later';
 };
 
-export function taskText(t, today = dateStr()) {
+/** Hora efectiva: la propia de la tarea si la cambió a mano; si no, la hora general de los avisos. */
+export const taskTime = (t, defaultTime = '09:00') => (t.timeCustom && /^\d{2}:\d{2}$/.test(t.time || '') ? t.time : defaultTime);
+
+export function taskText(t, today = dateStr(), defaultTime = '09:00') {
   const d = daysBetween(today, t.due);
   const when = d < 0 ? (d === -1 ? 'venció ayer' : `venció hace ${-d} días`) : d === 0 ? 'hoy' : d === 1 ? 'mañana' : `en ${d} días`;
   const rep = t.every ? ` · se repite cada ${t.every} días${t.left ? ` (${t.left} ${t.left === 1 ? 'vez' : 'veces'})` : ''}` : '';
-  return `${when} · ${t.time}${rep}`;
+  return `${when} · ${taskTime(t, defaultTime)}${t.time2 ? ` y ${t.time2}` : ''}${rep}`;
 }
 
 /** Tareas vencidas o de hoy, para el aviso de la lista. */
@@ -173,25 +176,28 @@ export function dueTasks(plants, today = dateStr()) {
 }
 
 /** Notificaciones de tareas: una a su hora y hasta 3 más si se pasa. Ids desde 1.000.000 (no chocan con riego ni frío). */
-export function buildTaskSchedule(plants, now = new Date()) {
+export function buildTaskSchedule(plants, now = new Date(), defaultTime = '09:00') {
   const today = dateStr(now);
   const all = [];
   for (const p of plants) for (const t of p.tasks || []) all.push({ p, t });
-  all.sort((a, b) => (a.t.due + a.t.time + a.t.id).localeCompare(b.t.due + b.t.time + b.t.id));
+  all.sort((a, b) => (a.t.due + a.t.id).localeCompare(b.t.due + b.t.id));
   const out = [];
   all.forEach(({ p, t }, idx) => {
-    const [h, m] = String(t.time || '09:00').split(':').map(Number);
+    const times = [taskTime(t, defaultTime), /^\d{2}:\d{2}$/.test(t.time2 || '') ? t.time2 : null].filter(Boolean);
     const start = daysBetween(today, t.due) >= 0 ? t.due : today;
     for (let k = 0; k <= OVERDUE_REMINDERS; k++) {
-      const at = atTime(addDays(start, k), h || 0, m || 0);
-      if (at <= now) continue;
-      const late = daysBetween(t.due, addDays(start, k));
-      out.push({
-        id: 1000000 + idx * 5 + k,
-        plantId: p.id,
-        title: late === 0 ? `${p.name}: ${t.title}` : `Pendiente en ${p.name}: ${t.title}`,
-        body: t.detail || (late === 0 ? 'Tenés una tarea para hoy 🌿' : 'Se te pasó esta tarea.'),
-        at,
+      times.forEach((tm, si) => {
+        const [h, m] = tm.split(':').map(Number);
+        const at = atTime(addDays(start, k), h || 0, m || 0);
+        if (at <= now) return;
+        const late = daysBetween(t.due, addDays(start, k));
+        out.push({
+          id: 1000000 + idx * 10 + k * 2 + si,
+          plantId: p.id,
+          title: late === 0 ? `${p.name}: ${t.title}` : `Pendiente en ${p.name}: ${t.title}`,
+          body: t.detail || (late === 0 ? 'Tenés una tarea para hoy 🌿' : 'Se te pasó esta tarea.'),
+          at,
+        });
       });
     }
   });

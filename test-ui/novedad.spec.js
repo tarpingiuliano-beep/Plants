@@ -46,15 +46,14 @@ test('sumar novedad: pedido, respuesta pegada, tareas y hecha', async () => {
   click('[data-action="nov-read"]'); await wait();
   expect(app.textContent).toContain('Sol directo');
   expect(document.querySelectorAll('.nov-chk').length).toBe(3);
-  expect(document.querySelector('.nov-time').value).toBe('08:30');
+  expect(document.querySelector('.nov-time')).toBeNull(); // la hora es la general de Ajustes
   document.querySelectorAll('.nov-chk')[2].checked = false;
-  document.querySelectorAll('.nov-time')[1].value = '19:15';
   click('[data-action="nov-save"]'); await wait(80);
 
   const s = JSON.parse(localStorage.getItem('plantas.v1'));
   const p = s.plants[0];
   expect(p.tasks.length).toBe(2);
-  expect(p.tasks[1].time).toBe('19:15');
+  expect(p.tasks[1].timeCustom).toBeFalsy();
   expect(p.tasks[1].every).toBe(10);
   expect(p.history[0].type).toBe('novedad');
   expect(p.history[0].diagnosis.causa).toBe('Sol directo');

@@ -56,23 +56,28 @@ test('tareas: una vez, repetidas y fin', () => {
   assert.equal(completeTask(infinite, infinite[0].id, '2026-10-15')[0].left, null);
 });
 
-test('avisos de tareas: hora propia, ids únicos, vencidas', () => {
-  const now = new Date(2026, 9, 15, 10, 0);
+test('avisos de tareas: hora general, hora propia, segunda hora, ids únicos, vencidas', () => {
+  const now = new Date(2026, 9, 15, 6, 0);
   const tasks = tasksFromActions([
     { titulo: 'A', en_dias: 0, time: '18:30' },
     { titulo: 'B', en_dias: 3, time: '08:00' },
   ], '2026-10-15');
+  tasks[0] = { ...tasks[0], timeCustom: true, time: '18:30' };
+  tasks[1] = { ...tasks[1], time2: '19:00' };
   const p = { ...plant, tasks };
-  const s = buildTaskSchedule([p, { ...plant, id: 'p2', name: 'Otra', tasks: tasksFromActions([{ titulo: 'C', en_dias: -1, time: '09:00' }], '2026-10-15') }], now);
+  const s = buildTaskSchedule([p, { ...plant, id: 'p2', name: 'Otra', tasks: tasksFromActions([{ titulo: 'C', en_dias: -1 }], '2026-10-15') }], now, '07:00');
   const a = s.find((x) => x.title === 'Palmera: A');
   assert.equal(a.at.getHours(), 18);
   assert.equal(a.at.getMinutes(), 30);
   assert.equal(a.plantId, 'p1');
+  const b = s.filter((x) => x.title === 'Palmera: B').map((x) => x.at.getHours()).sort((x, y) => x - y);
+  assert.deepEqual(b, [7, 19]); // hora general y segunda hora
   assert.equal(new Set(s.map((x) => x.id)).size, s.length);
   assert.ok(s.every((x) => x.id >= 1000000 && x.at > now));
-  assert.ok(s.some((x) => /Pendiente en Otra: C/.test(x.title)));
+  assert.ok(s.some((x) => /Pendiente en Otra: C/.test(x.title) && x.at.getHours() === 7));
   assert.equal(dueTasks([p], '2026-10-15').length, 1);
-  assert.match(taskText(tasks[1], '2026-10-15'), /en 3 días · 08:00/);
+  assert.match(taskText(tasks[1], '2026-10-15', '07:00'), /en 3 días · 07:00 y 19:00/);
+  assert.match(taskText(tasks[0], '2026-10-15', '07:00'), /hoy · 18:30/);
 });
 
 import { makeTask } from '../src/novedad.js';
