@@ -1,3 +1,4 @@
+import { netFetch } from './http.js';
 import { summarizeClimate } from './logic.js';
 
 /* ---------- Clima (Open-Meteo, sin clave) ---------- */
@@ -7,7 +8,7 @@ export async function fetchClimate({ lat, lon }) {
     'https://api.open-meteo.com/v1/forecast' +
     `?latitude=${lat}&longitude=${lon}` +
     '&daily=temperature_2m_max,temperature_2m_min,precipitation_sum,weather_code,wind_gusts_10m_max&timezone=auto&forecast_days=16';
-  const r = await fetch(url);
+  const r = await netFetch(url);
   if (!r.ok) throw new Error(`Clima: error ${r.status}`);
   const j = await r.json();
   const d = j.daily;
@@ -27,7 +28,7 @@ export async function fetchClimate({ lat, lon }) {
 
 export async function searchCity(q) {
   const url = `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(q)}&count=5&language=es&format=json`;
-  const r = await fetch(url);
+  const r = await netFetch(url);
   if (!r.ok) throw new Error(`Búsqueda: error ${r.status}`);
   const j = await r.json();
   return (j.results || []).map((x) => ({
@@ -68,7 +69,7 @@ const detail = (status, msg) => `(error ${status}${msg ? `: ${msg}` : ''})`;
 /** Prueba la clave sin mandar ninguna foto. */
 export async function testKey(apiKey) {
   try {
-    const res = await fetch(`https://my-api.plantnet.org/v2/projects?api-key=${encodeURIComponent(apiKey)}`);
+    const res = await netFetch(`https://my-api.plantnet.org/v2/projects?api-key=${encodeURIComponent(apiKey)}`);
     if (res.ok) return { ok: true, status: res.status, msg: '' };
     return { ok: false, status: res.status, msg: await readError(res) };
   } catch {
@@ -97,7 +98,7 @@ export async function identifyPlant(dataUrl, apiKey) {
 
   let res;
   try {
-    res = await fetch(url, { method: 'POST', body: form });
+    res = await netFetch(url, { method: 'POST', body: form });
   } catch {
     throw new Error('No pude conectarme con PlantNet. Revisá tu conexión.');
   }
@@ -118,7 +119,7 @@ export async function fetchWiki(sci) {
   const title = encodeURIComponent(String(sci).trim().replace(/\s+/g, '_'));
   for (const lang of ['es', 'en']) {
     try {
-      const r = await fetch(`https://${lang}.wikipedia.org/api/rest_v1/page/summary/${title}`);
+      const r = await netFetch(`https://${lang}.wikipedia.org/api/rest_v1/page/summary/${title}`);
       if (!r.ok) continue;
       const j = await r.json();
       if (j.type === 'disambiguation' || !j.extract) continue;

@@ -1,6 +1,8 @@
 /* Cuidados de una especie consultados a Gemini (API directa). Solo se envía el nombre de la especie,
    dónde está la planta y el clima general: nunca fotos ni datos personales. */
 
+import { netFetch } from './http.js';
+
 const BASE = 'https://generativelanguage.googleapis.com/v1beta';
 const HUMIDITY = ['baja', 'media', 'alta'];
 
@@ -85,7 +87,7 @@ async function errMsg(res) {
 /** Prueba la clave y elige el modelo. { ok, model, status, msg } */
 export async function testGeminiKey(key) {
   try {
-    const res = await fetch(`${BASE}/models?pageSize=100`, { headers: { 'x-goog-api-key': key } });
+    const res = await netFetch(`${BASE}/models?pageSize=100`, { headers: { 'x-goog-api-key': key } });
     if (!res.ok) return { ok: false, status: res.status, msg: await errMsg(res) };
     const model = pickModel((await res.json()).models);
     return model ? { ok: true, model } : { ok: false, status: 200, msg: 'No encontré un modelo disponible con esta clave.' };
@@ -97,7 +99,7 @@ export async function testGeminiKey(key) {
 /** Pide los cuidados de una especie. Devuelve { care } o { error, quota }. */
 export async function askCare(ctx, key, model) {
   try {
-    const res = await fetch(`${BASE}/models/${model}:generateContent`, {
+    const res = await netFetch(`${BASE}/models/${model}:generateContent`, {
       method: 'POST',
       headers: { 'x-goog-api-key': key, 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -193,7 +195,7 @@ export function parseExtra(raw) {
 /** Pide la ficha de temporada. { extra } o { error, quota } */
 export async function askExtra(ctx, key, model) {
   try {
-    const res = await fetch(`${BASE}/models/${model}:generateContent`, {
+    const res = await netFetch(`${BASE}/models/${model}:generateContent`, {
       method: 'POST',
       headers: { 'x-goog-api-key': key, 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -219,7 +221,7 @@ export async function askExtra(ctx, key, model) {
 /** Pide a Gemini una respuesta JSON para un texto cualquiera. { text } o { error, quota } */
 export async function askJson(prompt, key, model, images = []) {
   try {
-    const res = await fetch(`${BASE}/models/${model}:generateContent`, {
+    const res = await netFetch(`${BASE}/models/${model}:generateContent`, {
       method: 'POST',
       headers: { 'x-goog-api-key': key, 'Content-Type': 'application/json' },
       body: JSON.stringify({
