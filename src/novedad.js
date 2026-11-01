@@ -24,10 +24,14 @@ export function buildPrompt({ plant, care, placement, place, climate, text, phot
   const prev = recent.length
     ? `\nNovedades anteriores de esta planta:\n${recent.map((h) => `- ${h.at.slice(0, 10)}: ${h.note || ''}${h.diagnosis?.causa ? ` → ${h.diagnosis.causa}` : ''}`).join('\n')}\n`
     : '';
+  const pending = (plant.tasks || []).filter((t) => t.source === 'novedad');
+  const pend = pending.length
+    ? `\nTareas pendientes que ya tengo de esas novedades (si el diagnóstico cambió, reemplazan a estas):\n${pending.map((t) => `- ${t.due}: ${t.title}`).join('\n')}\n`
+    : '';
   return `Sos un experto en cuidado de plantas. Te paso ${photoCount ? `${photoCount} foto${photoCount === 1 ? '' : 's'} y ` : ''}el contexto de una planta mía.
 
 ${ctx.join('\n')}
-${prev}
+${prev}${pend}
 Lo que noté: ${text.trim() || '(sin descripción, mirá las fotos)'}
 
 Respondé SOLO con un bloque JSON (sin texto antes ni después) con exactamente esta forma:
@@ -41,7 +45,7 @@ Respondé SOLO con un bloque JSON (sin texto antes ni después) con exactamente 
   ],
   "dudas": ["qué dato o foto te ayudaría a estar más seguro (opcional)"]
 }
-Reglas: "en_dias" es en cuántos días hacer la acción (0 = hoy). Si es un seguimiento periódico (ej. revisar cada 10 días), poné "repetir_cada_dias": 10 y "veces": cuántas veces repetirlo (o null si no tiene fin). Máximo ${MAX_ACTIONS} acciones. Si no estás seguro, decilo en "confianza" y no inventes.`;
+Reglas: "en_dias" es en cuántos días hacer la acción (0 = hoy). Si es un seguimiento periódico (ej. revisar cada 10 días), poné "repetir_cada_dias": 10 y "veces": cuántas veces repetirlo (o null si no tiene fin). Máximo ${MAX_ACTIONS} acciones. Si hay novedades anteriores y lo que te cuento ahora cambia o corrige ese diagnóstico, decilo claramente en "resumen" y dame el plan completo actualizado. Si no estás seguro, decilo en "confianza" y no inventes.`;
 }
 
 const str = (v, n) => (typeof v === 'string' ? v.trim().slice(0, n) : '');

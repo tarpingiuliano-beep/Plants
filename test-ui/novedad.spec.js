@@ -72,4 +72,21 @@ test('sumar novedad: pedido, respuesta pegada, tareas y hecha', async () => {
   // el banner de la lista avisa lo de hoy
   location.hash = '#/'; await wait();
   expect(app.textContent).not.toContain('tarea para hoy'); // la que queda es de dentro de 10 días
+
+  // segunda novedad con un diagnóstico distinto: reemplaza las tareas pendientes de la anterior
+  location.hash = '#/p/a'; await wait();
+  click('[data-action="nov-start"]'); await wait();
+  document.getElementById('nov-text').value = 'Gemini dice que es falta de agua';
+  click('[data-action="nov-build"]'); await wait();
+  expect(app.querySelector('details textarea').value).toContain('Tareas pendientes que ya tengo');
+  expect(app.querySelector('details textarea').value).toContain('Revisar evolución');
+  document.getElementById('nov-raw').value = JSON.stringify({
+    resumen: 'Es falta de agua', causa_probable: 'Riego escaso', confianza: 'alta', gravedad: 'moderada', dudas: [],
+    acciones: [{ titulo: 'Regar a fondo', detalle: 'Hasta que drene', en_dias: 0 }],
+  });
+  click('[data-action="nov-read"]'); await wait();
+  expect(document.getElementById('nov-replace').checked).toBe(true);
+  click('[data-action="nov-save"]'); await wait(80);
+  const p3 = JSON.parse(localStorage.getItem('plantas.v1')).plants[0];
+  expect(p3.tasks.map((t) => t.title)).toEqual(['Regar a fondo']);
 });

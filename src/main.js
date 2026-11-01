@@ -1116,6 +1116,11 @@ function viewNovedad(p) {
       .join('')}`
         : '<p class="sub">Gemini no sugirió tareas.</p>'
     }
+    ${
+      r.acciones.length && (getPlant(nov.plantId)?.tasks || []).some((t) => t.source === 'novedad')
+        ? `<label class="check" style="margin: 8px 0"><input type="checkbox" id="nov-replace" checked /> Reemplazar las ${(getPlant(nov.plantId).tasks || []).filter((t) => t.source === 'novedad').length} tareas pendientes de la novedad anterior por estas <span class="sub">(el diagnóstico cambió)</span></label>`
+        : ''
+    }
     ${nov.msg ? `<p class="status warn">${esc(nov.msg)}</p>` : ''}
     <button class="btn block" data-action="nov-save">${r.acciones.length ? 'Crear tareas y guardar' : 'Guardar en el historial'}</button>
     ${r.acciones.length ? '<button class="btn secondary block" style="margin-top: 8px" data-action="nov-save-only">Guardar solo en el historial</button>' : ''}
@@ -1160,6 +1165,7 @@ async function saveNov(withTasks) {
       })
       .filter(Boolean);
   }
+  const replace = withTasks && picks.length && document.getElementById('nov-replace')?.checked;
   const thumbs = await Promise.all(nov.photos.map((x) => shrink(x, 220)));
   const entry = {
     at: new Date().toISOString(), type: 'novedad', note: nov.text.trim() || 'Novedad con fotos',
@@ -1167,7 +1173,7 @@ async function saveNov(withTasks) {
   };
   data.plants = data.plants.map((x) =>
     x.id === p.id
-      ? { ...x, history: [entry, ...x.history].slice(0, 200), tasks: [...(x.tasks || []), ...tasksFromActions(picks)] }
+      ? { ...x, history: [entry, ...x.history].slice(0, 200), tasks: [...(x.tasks || []).filter((t) => !(replace && t.source === 'novedad')), ...tasksFromActions(picks)] }
       : x,
   );
   persist();
