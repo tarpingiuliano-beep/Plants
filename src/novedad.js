@@ -48,6 +48,29 @@ Respondé SOLO con un bloque JSON (sin texto antes ni después) con exactamente 
 Reglas: "en_dias" es en cuántos días hacer la acción (0 = hoy). Si es un seguimiento periódico (ej. revisar cada 10 días), poné "repetir_cada_dias": 10 y "veces": cuántas veces repetirlo (o null si no tiene fin). Máximo ${MAX_ACTIONS} acciones. Si hay novedades anteriores y lo que te cuento ahora cambia o corrige ese diagnóstico, decilo claramente en "resumen" y dame el plan completo actualizado. Si no estás seguro, decilo en "confianza" y no inventes.`;
 }
 
+/** Pedido para convertir en tareas un texto que Gemini ya le dio al usuario (sin volver a explicar el caso). */
+export function buildConvertPrompt({ plant, text, today = dateStr() }) {
+  return `Te paso una respuesta que ya me dieron sobre mi planta "${plant.name}"${plant.sci ? ` (${plant.sci})` : ''} (hoy es ${today}). Convertila en tareas con fechas, usando SOLO lo que dice el texto, sin agregar ni inventar pasos.
+
+Texto:
+"""
+${String(text).trim().slice(0, 6000)}
+"""
+
+Respondé SOLO con un bloque JSON (sin texto antes ni después) con exactamente esta forma:
+{
+  "resumen": "qué diagnóstico o situación describe el texto, en 1 o 2 oraciones",
+  "causa_probable": "la causa que menciona el texto",
+  "confianza": "alta" | "media" | "baja",
+  "gravedad": "leve" | "moderada" | "seria",
+  "acciones": [
+    { "titulo": "acción corta y concreta", "detalle": "cómo hacerla, con lo que diga el texto", "en_dias": 0, "repetir_cada_dias": null, "veces": null }
+  ],
+  "dudas": []
+}
+Reglas: "en_dias" es en cuántos días hacer la acción según el texto (0 = hoy). Si el texto pide algo periódico (ej. revisar cada 3 días durante 2 semanas), poné "repetir_cada_dias" y "veces". Máximo ${MAX_ACTIONS} acciones.`;
+}
+
 const str = (v, n) => (typeof v === 'string' ? v.trim().slice(0, n) : '');
 const intIn = (v, min, max) => {
   const n = Math.round(Number(v));
@@ -80,7 +103,7 @@ export function parseAnswer(raw) {
   const actions = (Array.isArray(j.acciones) ? j.acciones : [])
     .map((a) => ({
       titulo: str(a?.titulo, 80),
-      detalle: str(a?.detalle, 300),
+      detalle: str(a?.detalle, 700),
       en_dias: intIn(a?.en_dias, 0, 365) ?? 0,
       repetir_cada_dias: Number(a?.repetir_cada_dias) >= 1 ? intIn(a.repetir_cada_dias, 1, 365) : null,
       veces: Number(a?.veces) >= 1 ? intIn(a.veces, 1, 30) : null,

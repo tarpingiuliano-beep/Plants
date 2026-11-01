@@ -11,7 +11,7 @@ import { taskTime } from './novedad.js';
 import { MONTHS, eventsOf, eventsInMonth, digestText, buildMonthlyDigests, monthsText } from './extras.js';
 import { shareTextFile, copyText, sharePhotosWithText } from './files.js';
 import {
-  MAX_PHOTOS, makeTask, buildPrompt, parseAnswer, tasksFromActions, completeTask, removeTask, taskState, taskText, dueTasks, buildTaskSchedule,
+  MAX_PHOTOS, makeTask, buildPrompt, buildConvertPrompt, parseAnswer, tasksFromActions, completeTask, removeTask, taskState, taskText, dueTasks, buildTaskSchedule,
 } from './novedad.js';
 import {
   dateStr,
@@ -97,7 +97,7 @@ function toast(msg) {
 }
 
 let nov = null; // "Sumar novedad" en curso
-const newNov = (plantId) => ({ plantId, text: '', photos: [], step: 'form', raw: '', result: null, msg: '' });
+const newNov = (plantId) => ({ mode: 'normal', pasted: '', busy: false, plantId, text: '', photos: [], step: 'form', raw: '', result: null, msg: '' });
 let pendingRestore = null; // { backup, summary } esperando confirmación
 let backupMsg = '';
 
@@ -1044,7 +1044,9 @@ function viewCalendar() {
 /* ---------- sumar novedad ---------- */
 
 const novPrompt = (p) =>
-  buildPrompt({
+  nov.mode === 'convert'
+    ? buildConvertPrompt({ plant: p, text: nov.pasted })
+    : buildPrompt({
     plant: p, care: careOf(p), placement: placementOf(p.placement), place: data.place, climate: data.climate,
     text: nov.text, photoCount: nov.photos.length,
   });
@@ -1066,7 +1068,20 @@ function viewNovedad(p) {
       <input type="file" id="nov-photo-input" accept="image/*" hidden />
       ${nov.msg ? `<p class="status warn" style="margin-top: 10px">${esc(nov.msg)}</p>` : ''}
       <button class="btn block" style="margin-top: 12px" data-action="nov-build">Armar el pedido para Gemini</button>
+      <button class="btn secondary block" style="margin-top: 8px" data-action="nov-paste">📋 Ya tengo la respuesta de Gemini: pegarla</button>
       <p class="hint">Sin claves: te preparo el texto con los datos de la planta, vos lo llevás a Gemini junto con las fotos y me traés la respuesta.</p>
+    </div>`;
+  }
+
+  if (nov.step === 'paste') {
+    return `${head}
+    <div class="card" style="padding: 16px">
+      <b>Pegá el paso a paso que te dio Gemini</b>
+      <p class="sub" style="margin: 4px 0 10px">No hace falta volver a explicar el caso: ${hasGemini() ? 'lo convierto en tareas con aviso.' : 'te preparo un pedido corto para que Gemini lo convierta en tareas y me traés el resultado.'}</p>
+      <textarea id="nov-raw" rows="10" placeholder="Pegá acá el texto completo">${esc(nov.raw)}</textarea>
+      ${nov.msg ? `<p class="status warn" style="margin-top: 10px">${esc(nov.msg)}</p>` : ''}
+      <button class="btn block" style="margin-top: 10px" data-action="nov-convert" ${nov.busy ? 'disabled' : ''}>${nov.busy ? 'Convirtiendo…' : 'Convertir en tareas'}</button>
+      <button class="btn secondary block" style="margin-top: 8px" data-action="nov-edit">← Volver</button>
     </div>`;
   }
 
@@ -1973,6 +1988,7 @@ $app.addEventListener('click', async (e) => {
       return rerender();
     }
     if (action === 'nov-build') {
+      nov.mode = 'normal';
       syncNov();
       if (!nov.text.trim() && !nov.photos.length) {
         nov.msg = 'Escribí qué notaste o agregá al menos una foto.';
@@ -1984,6 +2000,7 @@ $app.addEventListener('click', async (e) => {
     }
     if (action === 'nov-edit') {
       syncNov();
+      nov.mode = 'normal';
       nov.step = 'form';
       nov.msg = '';
       return render();
@@ -2001,6 +2018,52 @@ $app.addEventListener('click', async (e) => {
         toast('No pude compartir. Probá con “Copiar el pedido”.');
       }
       return;
+    }
+    if (action === 'nov-paste') {
+      syncNov();
+      nov.step = 'paste';
+      nov.raw = '';
+      nov.msg = '';
+      return render();
+    }
+    if (action === 'nov-convert') {
+      syncNov();
+      const text = nov.raw;
+      if (!text.trim()) {
+        nov.msg = 'Pegá primero el texto de Gemini.';
+        return render();
+      }
+      const direct = parseAnswer(text);
+      if (direct.ok) {
+        nov.result = direct.result;
+        nov.text = nov.text || 'Plan recibido de Gemini';
+        nov.step = 'review';
+        nov.msg = '';
+        return render();
+      }
+      nov.pasted = text;
+      nov.text = nov.text || 'Plan recibido de Gemini';
+      if (hasGemini() && online() && (await ensureModel())) {
+        nov.busy = true;
+        render();
+        const r = await askJson(buildConvertPrompt({ plant: getPlant(nov.plantId), text }), data.keys.gemini, data.keys.geminiModel);
+        nov.busy = false;
+        const pr = r.text ? parseAnswer(r.text) : null;
+        if (pr?.ok) {
+          nov.result = pr.result;
+          nov.step = 'review';
+          nov.msg = '';
+          return render();
+        }
+        nov.msg = r.error || (pr && pr.error) || 'No pude convertirlo. Probá de nuevo.';
+        if (/ 404/.test(r.error || '')) data.keys.geminiModel = '';
+        return render();
+      }
+      nov.mode = 'convert';
+      nov.raw = '';
+      nov.step = 'ask';
+      nov.msg = '';
+      return render();
     }
     if (action === 'nov-read') {
       syncNov();
