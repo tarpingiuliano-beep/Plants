@@ -8,6 +8,7 @@ import { askCare, askExtra, askJson, testGeminiKey } from './ai.js';
 import { monthStartOf, isHidden, applyFeedback, buildFeedbackPrompt, parseFeedback, GENERIC_GUIDES, guideKindOf, buildGuidePrompt, parseGuide, startGuide, advanceGuide, retryStep, cancelGuide } from './guia.js';
 import { TEMPLATES, templateById, buildRevisionPrompt, applyRevision, buildPlanPrompt, parsePlan, stageTask, stageState, stageEnd, createProject, projectProgress, addLog } from './projects.js';
 import { taskTime } from './novedad.js';
+import { KINDS, applyGeneral, buildGeneralPrompt, parseGeneral } from './general.js';
 import { MONTHS, eventsOf, eventsInMonth, digestText, buildMonthlyDigests, monthsText } from './extras.js';
 import { shareTextFile, copyText, sharePhotosWithText } from './files.js';
 import {
@@ -504,7 +505,7 @@ function viewList() {
     <p>La reconozco y te digo cómo cuidarla.</p></div>`;
 
   return `<div class="topbar"><h1>Mis plantas</h1>
-      <div class="row" style="flex: none; gap: 4px"><button class="icon-btn" data-action="calendar" aria-label="Calendario">📅</button>
+      <div class="row" style="flex: none; gap: 4px"><button class="icon-btn" data-action="gn-open" aria-label="Novedad general">📝</button><button class="icon-btn" data-action="calendar" aria-label="Calendario">📅</button>
       <button class="icon-btn" data-action="settings" aria-label="Ajustes">⚙️</button></div></div>
     ${data.place ? `<p class="sub" style="margin: -6px 0 12px">${weatherLine()}</p>` : ''}
     ${banners.join('')}
@@ -1503,6 +1504,121 @@ function syncPjNote() {
   if (n) pjNote = n.value;
 }
 
+/* ---------- novedad general (varias plantas a la vez) ---------- */
+
+let gn = null; // { text, date, kinds, ids, ai, step, result, msg, busy }
+const newGn = () => ({ text: '', date: dateStr(), kinds: [], ids: data.plants.map((p) => p.id), ai: hasGemini(), step: 'form', result: null, msg: '', busy: false });
+
+function syncGn() {
+  if (!gn) return;
+  const t = document.getElementById('gn-text');
+  if (t) gn.text = t.value;
+  const d = document.getElementById('gn-date');
+  if (d && d.value) gn.date = d.value;
+  const a = document.getElementById('gn-ai');
+  if (a) gn.ai = a.checked;
+  if (document.querySelector('.gn-chk')) gn.ids = [...document.querySelectorAll('.gn-chk')].filter((c) => c.checked).map((c) => c.dataset.id);
+}
+
+function viewGeneral() {
+  const head = `<div class="topbar"><button class="icon-btn" data-action="gn-back" aria-label="Volver">←</button><h1>Novedad general</h1></div>`;
+  if (gn.step === 'result') {
+    const r = gn.result;
+    return `${head}
+      <div class="card" style="padding: 16px">
+        <b>Lo que anoté</b>
+        <p class="sub" style="margin: 4px 0 0">Quedó en el historial de ${gn.ids.length} ${gn.ids.length === 1 ? 'planta' : 'plantas'}.</p>
+        ${r ? `<p style="margin: 10px 0 0"><b>Gemini:</b> ${esc(r.resumen)}</p>${r.general ? `<p class="sub" style="margin: 6px 0 0">${esc(r.general)}</p>` : ''}` : ''}
+      </div>
+      ${
+        r
+          ? r.plantas
+              .map((pr) => {
+                const pl = getPlant(pr.id);
+                if (!pl) return '';
+                return `<div class="card" style="padding: 14px; margin-top: 10px"><b>${esc(pl.name)}</b>
+                  ${pr.evaluacion ? `<div class="sub" style="margin: 4px 0">${esc(pr.evaluacion)}</div>` : ''}
+                  ${pr.alerta ? `<p class="status warn" style="margin: 6px 0">⚠️ ${esc(pr.alerta)}</p>` : ''}
+                  ${pr.tareas
+                    .map((a, i) => `<label class="check" style="margin-top: 6px"><input type="checkbox" class="gn-task" data-id="${pr.id}" data-i="${i}" checked /> <span><b>${esc(a.titulo)}</b>${a.en_dias ? ` <span class="sub">(en ${a.en_dias} d)</span>` : ''}${a.repetir_cada_dias ? ` <span class="sub">· cada ${a.repetir_cada_dias} d${a.veces ? `, ${a.veces} veces` : ''}</span>` : ''}<span class="sub" style="display: block">${esc(a.detalle)}</span></span></label>`)
+                    .join('')}
+                  ${pr.tareas.length ? '' : '<div class="sub">Sin cambios sugeridos.</div>'}</div>`;
+              })
+              .join('')
+          : ''
+      }
+      ${gn.msg ? `<p class="status warn" style="margin-top: 10px">${esc(gn.msg)}</p>` : ''}
+      <button class="btn block" style="margin-top: 12px" data-action="gn-tasks">${r && r.plantas.some((x) => x.tareas.length) ? 'Crear las tareas tildadas' : 'Listo'}</button>`;
+  }
+  return `${head}
+    <div class="card" style="padding: 16px">
+      <label style="margin-top: 0">¿Qué hiciste?</label>
+      <div class="chips-row" style="display: flex; flex-wrap: wrap; gap: 6px">${KINDS.map((k) => `<button type="button" class="chip ${gn.kinds.includes(k.id) ? 'ok' : 'soon'}" style="border: 0; font: inherit; cursor: pointer" data-action="gn-kind" data-k="${k.id}">${k.icon} ${esc(k.label)}</button>`).join('')}</div>
+      <label for="gn-text">Contá qué pasó</label>
+      <textarea id="gn-text" rows="3" maxlength="500" placeholder="Ej: las regué con té de banana (menos las suculentas)">${esc(gn.text)}</textarea>
+      <label for="gn-date">¿Cuándo?</label>
+      <div class="row"><button type="button" class="btn secondary" data-action="gn-day" data-d="0">Hoy</button><button type="button" class="btn secondary" data-action="gn-day" data-d="1">Ayer</button>
+        <input type="date" id="gn-date" value="${esc(gn.date)}" max="${esc(dateStr())}" /></div>
+      <div class="row" style="margin-top: 14px; align-items: center"><b style="flex: 1">¿A qué plantas?</b>
+        <button type="button" class="btn secondary" style="flex: none" data-action="gn-all">Todas</button><button type="button" class="btn secondary" style="flex: none" data-action="gn-none">Ninguna</button></div>
+      ${data.plants.map((p) => `<label class="check" style="margin-top: 6px"><input type="checkbox" class="gn-chk" data-id="${p.id}" ${gn.ids.includes(p.id) ? 'checked' : ''} /> ${esc(p.name)} <span class="sub">${esc(p.species || '')}</span></label>`).join('')}
+      ${
+        hasGemini()
+          ? `<label class="check" style="margin-top: 14px"><input type="checkbox" id="gn-ai" ${gn.ai ? 'checked' : ''} /> Que Gemini evalúe si conviene cambiar algo <span class="sub">(manda el texto y los nombres de las plantas elegidas, nunca fotos)</span></label>`
+          : '<p class="hint">Sin clave de Gemini solo se anota en el historial y se actualiza lo que corresponda (riego, abono…).</p>'
+      }
+      ${gn.msg ? `<p class="status warn" style="margin-top: 10px">${esc(gn.msg)}</p>` : ''}
+      <button class="btn block" style="margin-top: 12px" data-action="gn-save" ${gn.busy ? 'disabled' : ''}>${gn.busy ? 'Anotando y consultando…' : 'Guardar'}</button>
+    </div>`;
+}
+
+async function saveGeneral() {
+  syncGn();
+  if (!gn.ids.length) return ((gn.msg = 'Tildá al menos una planta.'), render());
+  if (!gn.kinds.length && !gn.text.trim()) return ((gn.msg = 'Elegí qué hiciste o contá qué pasó.'), render());
+  gn.msg = '';
+  const ids = [...gn.ids];
+  data.plants = applyGeneral(data.plants, { ids, text: gn.text, date: gn.date, kinds: gn.kinds }, (p) => seasonOf(p));
+  persist();
+  let result = null;
+  if (gn.ai && hasGemini() && online() && (await ensureModel())) {
+    gn.busy = true;
+    render();
+    const pls = ids.map((id) => getPlant(id)).filter(Boolean).map((p) => ({
+      id: p.id, name: p.name, sci: p.sci, placementLabel: placementOf(p.placement).label, everyDays: p.everyDays, lastWatered: p.lastWatered, stage: p.stage,
+      pending: (p.tasks || []).map((t) => t.title).slice(0, 4),
+    }));
+    const r = await askJson(buildGeneralPrompt({ text: gn.text, date: gn.date, kinds: gn.kinds, plants: pls, place: data.place, climate: data.climate }), data.keys.gemini, data.keys.geminiModel);
+    gn.busy = false;
+    result = r.text ? parseGeneral(r.text, ids) : null;
+    if (!result) gn.msg = r.error || 'Gemini no devolvió algo que pueda leer. Lo anotado quedó guardado igual.';
+    if (/ 404/.test(r.error || '')) data.keys.geminiModel = '';
+  }
+  gn.result = result;
+  gn.step = 'result';
+  toast(`Anotado en ${ids.length} ${ids.length === 1 ? 'planta' : 'plantas'} ✓`);
+  render();
+}
+
+function createGeneralTasks() {
+  const r = gn.result;
+  let n = 0;
+  if (r) {
+    document.querySelectorAll('.gn-task').forEach((c) => {
+      if (!c.checked) return;
+      const a = r.plantas.find((x) => x.id === c.dataset.id)?.tareas[Number(c.dataset.i)];
+      if (!a) return;
+      const t = tasksFromActions([a])[0];
+      data.plants = data.plants.map((x) => (x.id === c.dataset.id ? { ...x, tasks: [...(x.tasks || []), t] } : x));
+      n++;
+    });
+    if (n) persist();
+  }
+  gn = null;
+  toast(n ? `${n} ${n === 1 ? 'tarea creada' : 'tareas creadas'} 🔔` : 'Listo');
+  go('/', true);
+}
+
 /* ---------- router ---------- */
 
 function render() {
@@ -1523,13 +1639,16 @@ function render() {
     html = viewPjNew();
   } else if (name === 'proyecto' && getProject(id)) {
     html = viewProject(getProject(id));
+  } else if (name === 'novedades') {
+    if (!gn) gn = newGn();
+    html = viewGeneral();
   } else if (name === 'calendario') html = viewCalendar();
   else if (name === 'ajustes') html = viewSettings();
   else html = viewList();
 
   const keepScroll = window.scrollY;
   $app.innerHTML = html + soilSheet() + fbSheet();
-  if (['new', 'edit', 'ajustes', 'novedad', 'calendario', 'proyecto'].includes(name) && window.__keepScroll) window.scrollTo(0, keepScroll);
+  if (['new', 'edit', 'ajustes', 'novedad', 'calendario', 'proyecto', 'novedades'].includes(name) && window.__keepScroll) window.scrollTo(0, keepScroll);
   else window.scrollTo(0, 0);
   window.__keepScroll = false;
 }
@@ -1672,6 +1791,34 @@ $app.addEventListener('click', async (e) => {
     return doWater(id);
   }
   if (action === 'open') return go(`/p/${id}`);
+  if (action === 'gn-open') {
+    gn = newGn();
+    return go('/novedades');
+  }
+  if (action === 'gn-back') {
+    gn = null;
+    return history.length > 1 ? history.back() : go('/', true);
+  }
+  if (action === 'gn-kind') {
+    syncGn();
+    const k = el.dataset.k;
+    gn.kinds = gn.kinds.includes(k) ? gn.kinds.filter((x) => x !== k) : [...gn.kinds, k];
+    return rerender();
+  }
+  if (action === 'gn-day') {
+    syncGn();
+    const d = new Date();
+    d.setDate(d.getDate() - Number(el.dataset.d));
+    gn.date = dateStr(d);
+    return rerender();
+  }
+  if (action === 'gn-all' || action === 'gn-none') {
+    syncGn();
+    gn.ids = action === 'gn-all' ? data.plants.map((p) => p.id) : [];
+    return rerender();
+  }
+  if (action === 'gn-save') return saveGeneral();
+  if (action === 'gn-tasks') return createGeneralTasks();
   if (action === 'open-any') return go(getProject(id) ? `/proyecto/${id}` : `/p/${id}`);
   if (action === 'open-pj') return go(`/proyecto/${id}`);
   if (action === 'pj-new') {
