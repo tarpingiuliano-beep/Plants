@@ -10,6 +10,7 @@ import { TEMPLATES, templateById, buildRevisionPrompt, applyRevision, buildPlanP
 import { taskTime } from './novedad.js';
 import { KINDS, applyGeneral, buildGeneralPrompt, parseGeneral } from './general.js';
 import { MONTHS, eventsOf, eventsInMonth, digestText, buildMonthlyDigests, monthsText } from './extras.js';
+import { CLOUD_FILE, validRepo, cloudDue, pushBackup, pullBackup } from './cloud.js';
 import { shareTextFile, copyText, sharePhotosWithText } from './files.js';
 import {
   MAX_PHOTOS, makeTask, buildPrompt, buildConvertPrompt, parseAnswer, tasksFromActions, completeTask, removeTask, taskState, taskText, dueTasks, buildTaskSchedule,
@@ -59,6 +60,8 @@ let draft = null; // borrador del formulario de planta
 let cityResults = [];
 let cityMsg = '';
 let keyMsg = '';
+let cloudMsg = '';
+let cloudBusy = false;
 let gMsg = '';
 let aiBusy = false;
 
@@ -423,6 +426,31 @@ function weatherLine() {
   return `📍 ${esc(data.place.name)} · ${Math.round(c.avgTemp)} °C de media esta semana`;
 }
 
+const cloudOn = () => !!(data.keys.github && validRepo(data.keys.githubRepo));
+
+/** Sube el respaldo a GitHub. manual=true muestra el resultado; el automático solo guarda el estado. */
+async function cloudBackup(manual) {
+  if (cloudBusy || !cloudOn() || !online()) return;
+  cloudBusy = true;
+  const r = await pushBackup({ token: data.keys.github, repo: data.keys.githubRepo, text: JSON.stringify(buildBackup(data)) });
+  cloudBusy = false;
+  const now = new Date().toISOString();
+  if (r.ok) {
+    data.lastCloudBackup = now;
+    data.lastBackup = now;
+    data.cloudError = '';
+  } else {
+    data.cloudError = r.error;
+  }
+  persist({ resched: false });
+  if (manual) cloudMsg = r.ok ? '✅ Respaldo subido a GitHub.' : r.error;
+  if (routeName() === 'ajustes') render();
+}
+
+function maybeAutoBackup() {
+  if (online() && cloudDue(data.keys, data.lastCloudBackup, new Date(), data.keys.githubAuto !== false)) cloudBackup(false);
+}
+
 function viewList() {
   const today = dateStr();
   const plants = sortPlants(data.plants, today);
@@ -432,7 +460,7 @@ function viewList() {
     banners.push(`<div class="banner"><span>🔔 Activá las notificaciones para que te avise cuándo regar.</span>
       <button class="btn" data-action="ask-perm">Activar</button></div>`);
   }
-  if (needsBackupReminder(data.plants.length, data.lastBackup)) {
+  if (!cloudOn() && needsBackupReminder(data.plants.length, data.lastBackup)) {
     banners.push(`<div class="banner"><span>💾 ${data.lastBackup ? 'Hace rato que no hacés un respaldo.' : 'Todavía no hiciste un respaldo de tus plantas.'}</span>
       <button class="btn" data-action="settings">Respaldar</button></div>`);
   }
@@ -821,6 +849,23 @@ function viewSettings() {
           : '<p class="sub">Todavía no hay especies.</p>'
       }
       ${online() && species.some((s) => !s.wiki) ? '<button class="btn secondary block" style="margin-top: 10px" data-action="sync-now">Completar ahora</button>' : ''}
+    </div>
+
+    <div class="card" style="padding: 16px; margin-top: 12px">
+      <b>☁️ Respaldo automático en GitHub</b>
+      <p class="hint" style="margin-top: 4px">Una vez por día, al abrir la app con internet, copia tus plantas y proyectos a un repositorio <b>privado</b> tuyo. Si cambiás de celu o reinstalás, los traés con un botón. Fotos incluidas (puede pesar). Tu clave de PlantNet/Gemini no se sube.</p>
+      <label for="s-grepo" style="margin-top: 10px">Repositorio (usuario/nombre)</label>
+      <input type="text" id="s-grepo" value="${esc(data.keys.githubRepo || '')}" placeholder="tarpingiuliano-beep/respaldo-plantas" autocomplete="off" autocapitalize="off" />
+      <label for="s-gtoken" style="margin-top: 10px">Token de GitHub</label>
+      <input type="password" id="s-gtoken" value="${esc(data.keys.github || '')}" placeholder="github_pat_…" autocomplete="off" />
+      <label style="display: flex; gap: 8px; align-items: center; margin-top: 10px"><input type="checkbox" id="s-gauto" ${data.keys.githubAuto !== false ? 'checked' : ''} /> Respaldar solo cada día</label>
+      <button class="btn block" style="margin-top: 10px" data-action="cloud-save" ${cloudBusy ? 'disabled' : ''}>${cloudBusy ? 'Subiendo…' : 'Guardar y respaldar ahora'}</button>
+      <button class="btn secondary block" style="margin-top: 8px" data-action="cloud-restore">Restaurar desde GitHub</button>
+      <p class="sub" style="margin-top: 8px">${data.lastCloudBackup ? `Último respaldo en GitHub: ${esc(fmtWhen(data.lastCloudBackup))}` : 'Todavía no hay respaldo en GitHub.'}</p>
+      ${cloudMsg ? `<p class="status ${cloudMsg.startsWith('✅') ? '' : 'warn'}" style="margin-top: 6px">${esc(cloudMsg)}</p>` : data.cloudError ? `<p class="status warn" style="margin-top: 6px">Último intento automático falló: ${esc(data.cloudError)}</p>` : ''}
+      <details style="margin-top: 10px"><summary class="sub">Cómo configurarlo (una sola vez)</summary>
+        <p class="hint">1) En github.com creá un repositorio nuevo, <b>Private</b> (por ejemplo respaldo-plantas), con un README para que no esté vacío.<br>2) Settings → Developer settings → Personal access tokens → Fine-grained tokens → Generate new token. En “Repository access” elegí <b>Only select repositories</b> y ese repo; en Permissions → Repository permissions poné <b>Contents: Read and write</b>.<br>3) Copiá el token (empieza con github_pat_) y pegalo acá junto al nombre del repo. El token queda solo en este celular.</p>
+      </details>
     </div>
 
     <div class="card" style="padding: 16px; margin-top: 12px">
@@ -2012,6 +2057,56 @@ $app.addEventListener('click', async (e) => {
     }
     return rerender();
   }
+  if (action === 'cloud-save') {
+    const repo = document.getElementById('s-grepo')?.value.trim() || '';
+    const token = document.getElementById('s-gtoken')?.value.trim() || '';
+    if (!validRepo(repo)) {
+      cloudMsg = 'El repositorio va como usuario/nombre.';
+      return rerender();
+    }
+    if (!token) {
+      cloudMsg = 'Pegá primero el token de GitHub.';
+      return rerender();
+    }
+    if (!online()) {
+      cloudMsg = 'Necesito internet para respaldar.';
+      return rerender();
+    }
+    data.keys.githubRepo = repo;
+    data.keys.github = token;
+    data.keys.githubAuto = document.getElementById('s-gauto')?.checked !== false;
+    persist({ resched: false });
+    cloudMsg = '';
+    rerender();
+    await cloudBackup(true);
+    return rerender();
+  }
+  if (action === 'cloud-restore') {
+    const repo = document.getElementById('s-grepo')?.value.trim() || data.keys.githubRepo || '';
+    const token = document.getElementById('s-gtoken')?.value.trim() || data.keys.github || '';
+    if (!validRepo(repo) || !token) {
+      cloudMsg = 'Completá repositorio y token primero.';
+      return rerender();
+    }
+    if (!online()) {
+      cloudMsg = 'Necesito internet para restaurar.';
+      return rerender();
+    }
+    data.keys.githubRepo = repo;
+    data.keys.github = token;
+    persist({ resched: false });
+    cloudMsg = 'Buscando el respaldo…';
+    rerender();
+    const r = await pullBackup({ token, repo });
+    if (r.ok) {
+      pendingRestore = { backup: r.backup, summary: summarize(r.backup.data) };
+      cloudMsg = '';
+      backupMsg = '';
+    } else {
+      cloudMsg = r.error;
+    }
+    return rerender();
+  }
   if (action === 'backup-pick') return document.getElementById('backup-input')?.click();
   if (action === 'restore-cancel') {
     pendingRestore = null;
@@ -2449,6 +2544,10 @@ $app.addEventListener('change', async (e) => {
     toast(data.keys.gemini ? 'Clave guardada' : 'Clave borrada');
     if (data.keys.gemini) syncAiCare();
   }
+  if (t.id === 's-grepo' || t.id === 's-gtoken' || t.id === 's-gauto') {
+    if (t.id === 's-gauto') data.keys.githubAuto = t.checked;
+    persist({ resched: false });
+  }
   if (t.id === 's-key') {
     data.keys.plantnet = t.value.trim();
     persist({ resched: false });
@@ -2472,6 +2571,7 @@ document.addEventListener('visibilitychange', () => {
     }
   });
   syncOnline();
+  maybeAutoBackup();
 });
 
 /* ---------- arranque ---------- */
@@ -2509,4 +2609,5 @@ document.addEventListener('visibilitychange', () => {
   await reschedule(data.plants, data.settings, extraAlerts());
   render();
   syncOnline();
+  maybeAutoBackup();
 })();
