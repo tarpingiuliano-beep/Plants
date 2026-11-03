@@ -75,6 +75,30 @@ export function parseCare(text, sci, names = []) {
   };
 }
 
+const BUSY = new Set([500, 502, 503, 504]);
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+export const RETRY_WAITS = [3000, 6000, 10000];
+
+/** Llama a Gemini; si está saturado (503 y similares) reintenta y, si sigue, prueba un modelo liviano. */
+export async function gemPost(model, key, body, { waits = RETRY_WAITS, fallback = 'gemini-flash-lite-latest', f = netFetch } = {}) {
+  const call = (m) =>
+    f(`${BASE}/models/${m}:generateContent`, { method: 'POST', headers: { 'x-goog-api-key': key, 'Content-Type': 'application/json' }, body });
+  let res = await call(model);
+  for (let i = 0; BUSY.has(res.status) && i < waits.length; i++) {
+    await sleep(waits[i]);
+    res = await call(model);
+  }
+  if (BUSY.has(res.status) && fallback && fallback !== model) {
+    try {
+      const alt = await call(fallback);
+      if (alt.ok) return alt;
+    } catch {
+      /* me quedo con el error original */
+    }
+  }
+  return res;
+}
+
 async function errMsg(res) {
   try {
     const j = JSON.parse(await res.text());
@@ -99,18 +123,14 @@ export async function testGeminiKey(key) {
 /** Pide los cuidados de una especie. Devuelve { care } o { error, quota }. */
 export async function askCare(ctx, key, model) {
   try {
-    const res = await netFetch(`${BASE}/models/${model}:generateContent`, {
-      method: 'POST',
-      headers: { 'x-goog-api-key': key, 'Content-Type': 'application/json' },
-      body: JSON.stringify({
+    const res = await gemPost(model, key, JSON.stringify({
         contents: [{ parts: [{ text: buildCarePrompt(ctx) }] }],
         generationConfig: { responseMimeType: 'application/json', temperature: 0.2 },
-      }),
-    });
+      }));
     if (res.status === 429) return { error: 'Llegaste al límite gratuito de Gemini. Se reintenta más tarde.', quota: true };
     if (!res.ok) {
       const m = await errMsg(res);
-      return { error: `Gemini respondió error ${res.status}${m ? `: ${m}` : ''}` };
+      return { error: BUSY.has(res.status) ? 'Gemini está saturado en este momento (es de Google, no de tu clave). Probá de nuevo en unos minutos.' : `Gemini respondió error ${res.status}${m ? `: ${m}` : ''}` };
     }
     const j = await res.json();
     const text = j.candidates?.[0]?.content?.parts?.map((p) => p.text || '').join('') || '';
@@ -195,18 +215,14 @@ export function parseExtra(raw) {
 /** Pide la ficha de temporada. { extra } o { error, quota } */
 export async function askExtra(ctx, key, model) {
   try {
-    const res = await netFetch(`${BASE}/models/${model}:generateContent`, {
-      method: 'POST',
-      headers: { 'x-goog-api-key': key, 'Content-Type': 'application/json' },
-      body: JSON.stringify({
+    const res = await gemPost(model, key, JSON.stringify({
         contents: [{ parts: [{ text: buildExtraPrompt(ctx) }] }],
         generationConfig: { responseMimeType: 'application/json', temperature: 0.2 },
-      }),
-    });
+      }));
     if (res.status === 429) return { error: 'Llegaste al límite gratuito de Gemini.', quota: true };
     if (!res.ok) {
       const m = await errMsg(res);
-      return { error: `Gemini respondió error ${res.status}${m ? `: ${m}` : ''}` };
+      return { error: BUSY.has(res.status) ? 'Gemini está saturado en este momento (es de Google, no de tu clave). Probá de nuevo en unos minutos.' : `Gemini respondió error ${res.status}${m ? `: ${m}` : ''}` };
     }
     const j = await res.json();
     const t = j.candidates?.[0]?.content?.parts?.map((p) => p.text || '').join('') || '';
@@ -221,18 +237,14 @@ export async function askExtra(ctx, key, model) {
 /** Pide a Gemini una respuesta JSON para un texto cualquiera. { text } o { error, quota } */
 export async function askJson(prompt, key, model, images = []) {
   try {
-    const res = await netFetch(`${BASE}/models/${model}:generateContent`, {
-      method: 'POST',
-      headers: { 'x-goog-api-key': key, 'Content-Type': 'application/json' },
-      body: JSON.stringify({
+    const res = await gemPost(model, key, JSON.stringify({
         contents: [{ parts: [{ text: prompt }, ...images.map(imagePart).filter(Boolean)] }],
         generationConfig: { responseMimeType: 'application/json', temperature: 0.3 },
-      }),
-    });
+      }));
     if (res.status === 429) return { error: 'Llegaste al límite gratuito de Gemini. Probá más tarde.', quota: true };
     if (!res.ok) {
       const m = await errMsg(res);
-      return { error: `Gemini respondió error ${res.status}${m ? `: ${m}` : ''}` };
+      return { error: BUSY.has(res.status) ? 'Gemini está saturado en este momento (es de Google, no de tu clave). Probá de nuevo en unos minutos.' : `Gemini respondió error ${res.status}${m ? `: ${m}` : ''}` };
     }
     const j = await res.json();
     return { text: j.candidates?.[0]?.content?.parts?.map((p) => p.text || '').join('') || '' };
