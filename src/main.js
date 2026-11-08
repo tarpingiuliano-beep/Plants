@@ -346,9 +346,13 @@ function resolveManualSpecies() {
       draft.nameTouched = false;
     }
   } else {
-    draft.sci = text;
+    draft.sci = text.charAt(0).toUpperCase() + text.slice(1);
     draft.genus = '';
     draft.family = '';
+    if (!draft.nameTouched || !draft.name) {
+      draft.name = draft.sci;
+      draft.nameTouched = false;
+    }
   }
 }
 
@@ -665,8 +669,10 @@ function statusBox() {
   if (d.status === 'offline')
     return `<div class="status warn">Sin conexión: no puedo reconocerla ahora. Elegí la especie de la lista de abajo
       o probá de nuevo con wifi. <button type="button" class="btn" data-action="retry-id">Reintentar</button></div>`;
+  if (d.status === 'manual')
+    return '<div class="status">✍️ Escribí abajo el nombre que ya conocés (común o científico). Si no está en mi lista, igual la guardo con ese nombre y, si tenés Gemini, busco sus cuidados.</div>';
   if (d.status === 'nomatch')
-    return '<div class="status warn">No reconocí una planta en esa foto. Probá con una hoja o flor de cerca, o elegí la especie abajo.</div>';
+    return '<div class="status warn">No reconocí una planta en esa foto. Si ya sabés cómo se llama, escribí el nombre abajo en “Especie”. O probá con una hoja o flor de cerca.</div>';
   if (d.status === 'error')
     return `<div class="status warn">${esc(d.msg)} <button type="button" class="btn" data-action="retry-id">Reintentar</button></div>`;
   return '';
@@ -713,7 +719,8 @@ function viewForm() {
             <b>${esc(c.common || c.sci)}</b>
             <span class="sub">${esc(c.sci)} · ${Math.round(c.score * 100)}% de coincidencia</span></button>`,
         )
-        .join('')}</div>`
+        .join('')}</div>
+      <button type="button" class="btn secondary block" data-action="not-these">❌ Ninguna es: escribir el nombre yo</button>`
     : '';
 
   return `<div class="topbar">
@@ -2009,6 +2016,18 @@ $app.addEventListener('click', async (e) => {
   if (action === 'ask-perm') return doAskPerm();
   if (action === 'pick-photo') return takePhoto();
   if (action === 'retry-id') return identify();
+  if (action === 'not-these') {
+    syncDraft();
+    draft.candidates = [];
+    draft.sci = '';
+    draft.genus = '';
+    draft.family = '';
+    draft.speciesText = '';
+    if (!draft.nameTouched) draft.name = '';
+    draft.status = 'manual';
+    render();
+    return document.getElementById('f-species')?.focus();
+  }
   if (action === 'pick-cand') {
     syncDraft();
     pickCandidate(Number(i));
@@ -2508,6 +2527,7 @@ $app.addEventListener('change', async (e) => {
     syncDraft();
     resolveManualSpecies();
     refreshCareZone();
+    document.querySelectorAll('.cand').forEach((c, k) => c.classList.toggle('on', draft.candidates[k]?.sci === draft.sci));
   }
   if (t.id === 'f-auto') {
     syncDraft();
