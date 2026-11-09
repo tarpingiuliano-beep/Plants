@@ -75,7 +75,13 @@ export function waterStatus(plant, today = dateStr()) {
   return { days, state };
 }
 
-export function statusText({ days, state }) {
+export function statusText({ days, state }, water = false) {
+  if (water) {
+    if (state === 'overdue') return days === -1 ? 'Agua atrasada 1 día' : `Agua atrasada ${-days} días`;
+    if (state === 'today') return 'Renovar el agua hoy';
+    if (days === 1) return 'Renovar el agua mañana';
+    return `Renovar el agua en ${days} días`;
+  }
   if (state === 'overdue') {
     return days === -1 ? 'Atrasada 1 día' : `Atrasada ${-days} días`;
   }
@@ -117,7 +123,15 @@ export function buildSchedule(plants, settings, now = new Date()) {
       const late = daysBetween(due, day);
       let title;
       let body;
-      if (late === 0) {
+      if (p.water) {
+        if (late === 0) {
+          title = `Hoy toca renovar el agua: ${p.name}`;
+          body = 'Agua nueva, a temperatura ambiente. Enjuagá las raíces 💧';
+        } else {
+          title = `${p.name} necesita agua nueva`;
+          body = late === 1 ? 'Se pasó el cambio de agua de ayer.' : `Hace ${late} días que debías renovar el agua.`;
+        }
+      } else if (late === 0) {
         title = `Hoy toca regar: ${p.name}`;
         body = p.location ? `Está en: ${p.location}` : 'Tu planta te necesita 🌱';
       } else {
@@ -131,7 +145,7 @@ export function buildSchedule(plants, settings, now = new Date()) {
 }
 
 export function newPlant(
-  { nid, name, species, location, photo, everyDays, lastWatered, sci, genus, family, placement, auto, baseDays },
+  { nid, name, species, location, photo, everyDays, lastWatered, sci, genus, family, placement, auto, baseDays, water, zone },
   now = new Date(),
 ) {
   return {
@@ -147,6 +161,8 @@ export function newPlant(
     placement: placement || 'interior-luz',
     auto: !!auto,
     baseDays: Number(baseDays) || 0,
+    water: !!water,
+    zone: zone || '',
     everyDays: Math.max(1, Math.min(365, Number(everyDays) || 7)),
     lastWatered: lastWatered || dateStr(now),
     createdAt: now.toISOString(),

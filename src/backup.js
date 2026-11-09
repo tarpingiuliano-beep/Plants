@@ -1,4 +1,5 @@
 /* Respaldo y restauración (lógica pura, sin tocar el celular). */
+import { cleanZones } from './casa.js';
 
 export const BACKUP_APP = 'plantas';
 export const BACKUP_VERSION = 1;
@@ -13,6 +14,7 @@ export function buildBackup(data, now = new Date()) {
     data: {
       plants: data.plants || [],
       projects: data.projects || [],
+      zones: data.zones || [],
       species: data.species || {},
       settings: data.settings || {},
       place: data.place || null,
@@ -48,6 +50,7 @@ export function parseBackup(text) {
       data: {
         plants,
         projects: (Array.isArray(d.projects) ? d.projects : []).filter((p) => p && typeof p === 'object' && typeof p.id === 'string' && p.id && p.plan && Array.isArray(p.plan.etapas)),
+        zones: Array.isArray(d.zones) ? cleanZones(d.zones) : null,
         species: d.species && typeof d.species === 'object' ? d.species : {},
         settings: d.settings && typeof d.settings === 'object' ? d.settings : {},
         place: d.place && typeof d.place === 'object' ? d.place : null,
@@ -69,6 +72,7 @@ export function replaceWith(current, incoming) {
     ...current,
     plants: incoming.plants,
     projects: incoming.projects || [],
+    zones: incoming.zones && incoming.zones.length ? incoming.zones : current.zones,
     species: incoming.species,
     settings: { ...current.settings, ...incoming.settings },
     place: incoming.place || current.place,
@@ -89,8 +93,10 @@ export function mergeWith(current, incoming) {
   const species = { ...incoming.species, ...current.species };
   const haveJ = new Set((current.projects || []).map((p) => p.id));
   const newJ = (incoming.projects || []).filter((p) => !haveJ.has(p.id));
+  const haveZ = new Set((current.zones || []).map((z) => z.id));
+  const zones = [...(current.zones || []), ...(incoming.zones || []).filter((z) => !haveZ.has(z.id))];
   return {
-    data: { ...current, plants: [...current.plants, ...added], projects: [...(current.projects || []), ...newJ], species, nextNid: nid, place: current.place || incoming.place },
+    data: { ...current, zones, plants: [...current.plants, ...added], projects: [...(current.projects || []), ...newJ], species, nextNid: nid, place: current.place || incoming.place },
     added: added.length,
     addedProjects: newJ.length,
     skipped: incoming.plants.length - added.length,

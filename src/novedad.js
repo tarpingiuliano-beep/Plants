@@ -1,6 +1,7 @@
 /* "Sumar novedad": pedido para Gemini, lectura de la respuesta y tareas con recordatorio.
    Todo lógica pura (sin red ni pantalla). */
 import { dateStr, addDays, daysBetween, atTime } from './logic.js';
+import { looksLikeQuestions, QUESTIONS_MSG } from './chat.js';
 
 export const MAX_PHOTOS = 3;
 export const MAX_ACTIONS = 8;
@@ -10,13 +11,14 @@ const GRAVEDAD = ['leve', 'moderada', 'seria'];
 const CONFIANZA = ['alta', 'media', 'baja'];
 
 /** Texto que el usuario lleva a la app de Gemini junto con las fotos. */
-export function buildPrompt({ plant, care, placement, place, climate, text, photoCount, today = dateStr() }) {
+export function buildPrompt({ plant, care, placement, place, climate, text, photoCount, today = dateStr(), zone = '' }) {
   const ctx = [
     `- Planta: ${plant.name}${plant.sci ? ` (${plant.sci})` : plant.species ? ` (${plant.species})` : ''}`,
-    `- Dónde está: ${placement?.label || 'sin dato'}${plant.location ? ` (${plant.location})` : ''}`,
+    `- Dónde está: ${placement?.label || 'sin dato'}${plant.location ? ` (${plant.location})` : ''}${zone ? `. Lugar en mi casa: ${zone}` : ''}`,
+    plant.water ? '- La tengo en agua (frasco), no en tierra: en lugar de riego, renuevo el agua' : null,
     place ? `- Ciudad: ${place.name}` : null,
     climate ? `- Clima de la semana: ${Math.round(climate.avgTemp)} °C de media, mínima de ${Math.round(climate.minNext3)} °C en los próximos 3 días` : null,
-    `- Riego actual: cada ${plant.everyDays} días, último riego ${plant.lastWatered}`,
+    plant.water ? `- Cambio de agua: cada ${plant.everyDays} días, último cambio ${plant.lastWatered}` : `- Riego actual: cada ${plant.everyDays} días, último riego ${plant.lastWatered}`,
     care ? `- Cuidados típicos de la especie: riego cada ~${care.days} días, ${care.light || ''}`.trim() : null,
     `- Fecha de hoy: ${today}`,
   ].filter(Boolean);
@@ -98,6 +100,7 @@ export function parseAnswer(raw) {
   if (!String(raw || '').trim()) return { ok: false, error: 'Pegá primero la respuesta de Gemini.' };
   const j = extractJson(raw);
   if (!j || typeof j !== 'object') {
+    if (looksLikeQuestions(raw)) return { ok: false, error: QUESTIONS_MSG };
     return { ok: false, error: 'No pude leer la respuesta. Pedile a Gemini: "respondé solo con el bloque JSON" y pegala de nuevo.' };
   }
   const actions = (Array.isArray(j.acciones) ? j.acciones : [])

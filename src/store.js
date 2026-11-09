@@ -6,9 +6,12 @@ const DB_NAME = 'plantas';
 const STORE = 'kv';
 const REC = 'state';
 
+import { DEFAULT_ZONES, cleanZones } from './casa.js';
+
 export const defaultState = () => ({
   plants: [],
   projects: [], // proyectos (germinar, bonsái…)
+  zones: cleanZones(DEFAULT_ZONES), // lugares de la casa (sol, calor, adentro/afuera)
   settings: { hour: 9, minute: 0 },
   nextNid: 1,
   place: null, // { name, lat, lon }
@@ -26,6 +29,7 @@ function normalize(d) {
     ...d,
     plants: Array.isArray(d.plants) ? d.plants : [],
     projects: Array.isArray(d.projects) ? d.projects : [],
+    zones: Array.isArray(d.zones) ? cleanZones(d.zones) : base.zones,
     settings: { ...base.settings, ...(d.settings || {}) },
     keys: { ...base.keys, ...(d.keys || {}) },
     species: d.species && typeof d.species === 'object' ? d.species : {},

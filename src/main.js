@@ -11,6 +11,9 @@ import { taskTime } from './novedad.js';
 import { KINDS, applyGeneral, buildGeneralPrompt, parseGeneral } from './general.js';
 import { MONTHS, eventsOf, eventsInMonth, digestText, buildMonthlyDigests, monthsText } from './extras.js';
 import { CLOUD_FILE, validRepo, cloudDue, pushBackup, pullBackup } from './cloud.js';
+import { withChatRule } from './chat.js';
+import { waterRenewDays, WATER_TIPS, waterFit, cleaningTask, buildWaterPrompt, parseWater } from './agua.js';
+import { DEFAULT_ZONES, LIGHT_OPTIONS, zoneOf, assess, placementFor, cleanZones, LEVEL_ICON } from './casa.js';
 import { shareTextFile, copyText, sharePhotosWithText } from './files.js';
 import {
   MAX_PHOTOS, makeTask, buildPrompt, buildConvertPrompt, parseAnswer, tasksFromActions, completeTask, removeTask, taskState, taskText, dueTasks, buildTaskSchedule,
@@ -288,7 +291,7 @@ function newDraft(p) {
   if (!p) {
     return {
       id: '', photo: '', full: '', sci: '', genus: '', family: '', speciesText: '', name: '', nameTouched: false,
-      placement: 'interior-luz', auto: true, everyDays: 7, lastWatered: dateStr(),
+      placement: 'interior-luz', auto: true, everyDays: 7, lastWatered: dateStr(), medium: 'tierra', zone: '',
       candidates: [], status: 'idle', msg: '',
     };
   }
@@ -296,6 +299,7 @@ function newDraft(p) {
     id: p.id, photo: p.photo, full: '', sci: p.sci || '', genus: p.genus || '', family: p.family || '',
     speciesText: p.sci || p.species || '', name: p.name, nameTouched: true,
     placement: p.placement || 'interior-luz', auto: !!p.auto, everyDays: p.everyDays, lastWatered: p.lastWatered,
+    medium: p.water ? 'agua' : 'tierra', zone: p.zone || '',
     candidates: [], status: 'idle', msg: '',
   };
 }
@@ -474,6 +478,11 @@ function viewList() {
     banners.push(`<div class="banner"><span>📋 ${due.length === 1 ? '1 tarea para hoy' : `${due.length} tareas para hoy`}: ${esc(first.plant.name)} — ${esc(first.task.title)}${due.length > 1 ? '…' : ''}</span>
       <button class="btn" data-action="open-any" data-id="${first.plant.id}">Ver</button></div>`);
   }
+  const noZone = (data.zones || []).length ? data.plants.filter((p) => !p.zone).length : 0;
+  if (noZone) {
+    banners.push(`<div class="banner"><span>📍 ${noZone === 1 ? '1 planta sin lugar definido' : `${noZone} plantas sin lugar definido`} en tu casa. Completalo y te digo si está bien ubicada.</span>
+      <button class="btn" data-action="lugares">Completar</button></div>`);
+  }
   if (!data.place) {
     banners.push(`<div class="banner"><span>📍 Elegí dónde vivís y ajusto el riego al clima de tu zona.</span>
       <button class="btn" data-action="settings">Elegir</button></div>`);
@@ -508,7 +517,7 @@ function viewList() {
         <b>${outside.map((p) => esc(p.name)).join(', ')}</b></span></div>`);
     }
     if (c.rainToday >= 5) {
-      const wet = plants.filter((p) => placementOf(p.placement).outdoor && waterStatus(p, today).days <= 0);
+      const wet = plants.filter((p) => !p.water && placementOf(p.placement).outdoor && waterStatus(p, today).days <= 0);
       if (wet.length) {
         banners.push(`<div class="banner rain"><span>🌧️ Hoy llueve (${Math.round(c.rainToday)} mm): no hace falta regar
           <b>${wet.map((p) => esc(p.name)).join(', ')}</b>.</span></div>`);
@@ -519,15 +528,17 @@ function viewList() {
   const cards = plants
     .map((p) => {
       const st = waterStatus(p, today);
-      const meta = [p.species || p.sci, placementOf(p.placement).label].filter(Boolean).join(' · ');
+      const zn = zoneOf(data.zones, p.zone);
+      const meta = [p.species || p.sci, p.water ? '💧 en agua' : '', zn ? zn.name : placementOf(p.placement).label].filter(Boolean).join(' · ');
+      const as = zn ? assess(p, careOf(p), data.zones, data.climate) : null;
       return `<div class="card plant-card" data-action="open" data-id="${p.id}">
         ${photoHtml(p, 'thumb')}
         <div class="info">
           <div class="name">${esc(p.name)}</div>
           <div class="sub">${esc(meta)}</div>
-          <span class="chip ${st.state}">${statusText(st)}</span>
+          <span class="chip ${st.state}">${statusText(st, p.water)}</span>${as && as.move ? ' <span class="chip soon">📍 Conviene moverla</span>' : ''}
         </div>
-        <button class="water-btn" data-action="water" data-id="${p.id}" aria-label="Regar ${esc(p.name)}">💧</button>
+        <button class="water-btn" data-action="water" data-id="${p.id}" aria-label="${p.water ? 'Renové el agua de' : 'Regar'} ${esc(p.name)}">${p.water ? '🔄' : '💧'}</button>
       </div>`;
     })
     .join('');
@@ -577,6 +588,57 @@ function careCardHtml(care, placement, extra = {}) {
     </div>`;
 }
 
+let waterBusy = '';
+let waterMsg = '';
+
+function waterCardHtml(p) {
+  const fit = waterFit(p);
+  const t = data.climate?.avgTemp;
+  const sug = waterRenewDays(t);
+  const wc = p.waterCare;
+  const gem = wc
+    ? `<div style="margin-top: 10px"><b>🤖 Gemini sobre esta especie en agua</b> <span class="sub">· ${esc(wc.apta)} · seguridad ${esc(wc.confianza)}</span>
+        ${wc.dias && wc.dias !== p.everyDays ? `<p class="sub" style="margin: 6px 0">Sugiere renovar el agua cada ${wc.dias} días. <button class="btn secondary" data-action="water-days" data-id="${p.id}" data-d="${wc.dias}">Usar ${wc.dias}</button></p>` : ''}
+        ${wc.consejos.length ? `<ul class="notes">${wc.consejos.map((x) => `<li>🌱 ${esc(x)}</li>`).join('')}</ul>` : ''}
+        ${wc.riesgos.length ? `<ul class="notes">${wc.riesgos.map((x) => `<li>⚠️ ${esc(x)}</li>`).join('')}</ul>` : ''}
+        ${wc.nutrientes ? `<p class="sub">Nutrientes: ${esc(wc.nutrientes)}</p>` : ''}
+        ${wc.pasoATierra ? `<p class="sub">Pasar a tierra: ${esc(wc.pasoATierra)}</p>` : ''}</div>`
+    : '';
+  return `<div class="card" style="padding: 16px; margin-top: 12px"><b>💧 Cultivo en agua</b>
+      <p class="sub" style="margin: 6px 0">${esc(fit.text)}</p>
+      ${Number.isFinite(t) && sug !== p.everyDays ? `<p class="sub" style="margin: 6px 0">Con ${Math.round(t)} °C de media conviene renovar cada ~${sug} días (ahora: cada ${p.everyDays}). <button class="btn secondary" data-action="water-days" data-id="${p.id}" data-d="${sug}">Usar ${sug}</button></p>` : ''}
+      <ul class="notes">${WATER_TIPS.map((x) => `<li>💧 ${esc(x)}</li>`).join('')}</ul>
+      ${gem}
+      ${hasGemini() ? `<button class="btn secondary block" style="margin-top: 10px" data-action="ask-water" data-id="${p.id}" ${waterBusy === p.id ? 'disabled' : ''}>${waterBusy === p.id ? 'Consultando…' : `🤖 ${wc ? 'Actualizar' : 'Pedir'} recomendaciones a Gemini`}</button>` : '<p class="hint">Con tu clave de Gemini (en Ajustes) te doy recomendaciones específicas de esta especie en agua.</p>'}
+      ${waterMsg ? `<p class="status warn" style="margin-top: 8px">${esc(waterMsg)}</p>` : ''}
+    </div>`;
+}
+
+const zoneOptions = (sel) =>
+  `<option value="">— Sin definir —</option>${(data.zones || []).map((z) => `<option value="${esc(z.id)}" ${sel === z.id ? 'selected' : ''}>${esc(z.name)}</option>`).join('')}`;
+
+const LEVEL_TEXT = { bien: 'Está bien ubicada.', ojo: 'Se las arregla, pero no es lo ideal.', mal: 'Ahí no le conviene.', 'sin-datos': '' };
+
+/** Evaluación de una planta: dónde está, si le queda bien y a dónde moverla. */
+function zoneAssessHtml(p) {
+  const a = assess(p, careOf(p), data.zones, data.climate);
+  const mv = a.move ? `<p style="margin: 8px 0 0">➡️ <b>Te recomiendo moverla a: ${esc(a.move.zone.name)}</b><br /><span class="sub">${esc(a.move.zone.sun)}. ${esc(a.move.zone.note)}</span></p>` : '';
+  if (a.state === 'sin-lugar') {
+    return `<p class="sub" style="margin: 8px 0 0">Elegí en qué lugar está y te digo si le queda bien.</p>${a.move ? `<p class="sub" style="margin: 6px 0 0">Por lo que pide la especie, le iría bien: <b>${esc(a.move.zone.name)}</b>.</p>` : ''}`;
+  }
+  return `<p style="margin: 8px 0 0">${LEVEL_ICON[a.state]} <b>${LEVEL_TEXT[a.state]}</b></p>
+    ${a.fit.reasons.length ? `<ul class="notes">${a.fit.reasons.map((r) => `<li>${esc(r)}</li>`).join('')}</ul>` : ''}${mv}`;
+}
+
+function zoneCardHtml(p) {
+  if (!(data.zones || []).length) return '';
+  const z = zoneOf(data.zones, p.zone);
+  return `<div class="card" style="padding: 16px; margin-top: 12px"><b>📍 Lugar en mi casa</b>${z ? ` <span class="sub">· ${esc(z.sun)}</span>` : ''}
+      <select data-zone-sel="${p.id}" style="margin-top: 8px">${zoneOptions(p.zone)}</select>
+      ${zoneAssessHtml(p)}
+      <p class="hint" style="margin: 8px 0 0">Sale de la luz y temperatura que pide la especie y de las horas de sol que estimé para cada lugar (editables en Ajustes → Lugares de mi casa). Si ves hojas quemadas o estiradas, es la planta quien tiene la última palabra.</p></div>`;
+}
+
 function viewDetail(p) {
   const today = dateStr();
   const st = waterStatus(p, today);
@@ -590,8 +652,8 @@ function viewDetail(p) {
         ${(h.photos || []).length ? `<div class="thumbs">${h.photos.map((x) => `<img src="${x}" alt="" />`).join('')}</div>` : ''}
         <div class="when">${fmtWhen(h.at)}</div></div></li>`;
     }
-    return `<li><span>${h.type === 'riego' ? '💧' : '📝'}</span>
-      <div><div>${h.type === 'riego' ? `Riego${h.soil ? ` — ${esc(SOIL[h.soil] || '')}` : ''}` : esc(h.note)}${h.type === 'riego' && h.note ? ` — ${esc(h.note)}` : ''}</div>
+    return `<li><span>${h.type === 'riego' ? (p.water ? '🔄' : '💧') : '📝'}</span>
+      <div><div>${h.type === 'riego' ? `${p.water ? 'Cambio de agua' : 'Riego'}${h.soil ? ` — ${esc(SOIL[h.soil] || '')}` : ''}` : esc(h.note)}${h.type === 'riego' && h.note ? ` — ${esc(h.note)}` : ''}</div>
       <div class="when">${fmtWhen(h.at)}</div></div></li>`;
   };
   const hist = p.history.length ? p.history.map(histItem).join('') : '<p class="sub">Todavía no hay registros.</p>';
@@ -627,13 +689,13 @@ function viewDetail(p) {
       <div class="detail-body">
         <h1>${esc(p.name)}</h1>
         <div class="sub">${esc([p.sci, placementOf(p.placement).label].filter(Boolean).join(' · '))}</div>
-        <span class="chip ${st.state}">${statusText(st)}</span>
+        <span class="chip ${st.state}">${statusText(st, p.water)}</span>
         <div class="facts">
-          <div class="fact"><span class="sub">Frecuencia</span><b>Cada ${p.everyDays} ${p.everyDays === 1 ? 'día' : 'días'}</b>${
+          <div class="fact"><span class="sub">${p.water ? 'Renovar el agua' : 'Frecuencia'}</span><b>Cada ${p.everyDays} ${p.everyDays === 1 ? 'día' : 'días'}</b>${
             p.auto ? '<span class="sub">automática</span>' : ''
           }</div>
-          <div class="fact"><span class="sub">Último riego</span><b>${fmtDay(p.lastWatered)}</b></div>
-          <div class="fact"><span class="sub">Próximo riego</span><b>${fmtDay(nextDue(p))}</b></div>
+          <div class="fact"><span class="sub">${p.water ? 'Último cambio de agua' : 'Último riego'}</span><b>${fmtDay(p.lastWatered)}</b></div>
+          <div class="fact"><span class="sub">${p.water ? 'Próximo cambio' : 'Próximo riego'}</span><b>${fmtDay(nextDue(p))}</b></div>
           <div class="fact"><span class="sub">Aviso</span><b>${pad(data.settings.hour)}:${pad(data.settings.minute)}</b></div>
         </div>
         ${
@@ -644,11 +706,12 @@ function viewDetail(p) {
               <button class="btn secondary" style="margin-left: 6px" data-action="calib-reset" data-id="${p.id}">Restablecer</button></p>`
             : ''
         }
-        <button class="btn blue block" style="margin-top: 10px" data-action="water" data-id="${p.id}">💧 Ya la regué</button>
+        <button class="btn blue block" style="margin-top: 10px" data-action="water" data-id="${p.id}">${p.water ? '🔄 Ya renové el agua' : '💧 Ya la regué'}</button>
         <button class="btn secondary block" style="margin-top: 8px" data-action="nov-start" data-id="${p.id}">🩺 Sumar novedad</button>
       </div>
     </div>
-    ${care ? `<div style="margin-top: 12px">${careCardHtml(care, placementOf(p.placement), { wiki: sp?.wiki })}</div>` : ''}
+    ${zoneCardHtml(p)}
+    ${p.water ? waterCardHtml(p) : care ? `<div style="margin-top: 12px">${careCardHtml(care, placementOf(p.placement), { wiki: sp?.wiki })}</div>` : ''}
     ${seasonCardHtml(p)}
     ${guideCardHtml(p)}
     ${tasksHtml}
@@ -678,8 +741,22 @@ function statusBox() {
   return '';
 }
 
+function waterBoxHtml(d) {
+  const t = data.climate?.avgTemp;
+  const sug = waterRenewDays(t);
+  const fit = waterFit({ sci: d.sci, species: d.speciesText, name: d.name });
+  return `<div class="auto-box">💧 Planta en agua: te aviso para <b>renovar el agua</b>, no para regar.
+      <span class="sub">${Number.isFinite(t) ? `Con ${Math.round(t)} °C de media conviene cada ~${sug} días.` : 'Elegí tu ubicación en Ajustes para sugerirte según el clima.'} Se ajusta a mano acá abajo.</span></div>
+    <div><label for="f-every">Renovar el agua cada (días)</label>
+      <input type="number" id="f-every" min="1" max="60" inputmode="numeric" value="${esc(d.everyDays)}" required /></div>
+    <div class="care"><p class="sub" style="margin: 0 0 6px">${esc(fit.text)}</p>
+      <ul class="notes">${WATER_TIPS.map((x) => `<li>💧 ${esc(x)}</li>`).join('')}</ul>
+      <p class="hint" style="margin: 6px 0 0">Reglas generales de cultivo en agua. Cuando la guardes, desde su ficha podés pedirle a Gemini recomendaciones específicas de esta especie.</p></div>`;
+}
+
 function careZoneHtml() {
   const d = draft;
+  if (d.medium === 'agua') return waterBoxHtml(d);
   const care = draftCare();
   const pl = placementOf(d.placement);
   const t = data.climate?.avgTemp;
@@ -707,6 +784,12 @@ function refreshCareZone() {
   const nm = document.getElementById('f-name');
   if (nm && !draft.nameTouched) nm.value = draft.name;
   document.querySelectorAll('.pchip').forEach((c) => c.classList.toggle('on', c.dataset.id === draft.placement));
+}
+
+function zoneChipsHtml(sel) {
+  return `${(data.zones || [])
+    .map((z) => `<button type="button" class="pchip ${sel === z.id ? 'on' : ''}" data-action="zone-pick" data-id="${esc(z.id)}"><span>${z.outdoor ? '🌤️' : '🏠'}</span>${esc(z.name)}</button>`)
+    .join('')}<button type="button" class="pchip ${!sel ? 'on' : ''}" data-action="zone-pick" data-id=""><span>❔</span>Todavía no sé / sin definir</button>`;
 }
 
 function viewForm() {
@@ -738,17 +821,73 @@ function viewForm() {
         <datalist id="species-list">${allNames().map((n) => `<option value="${esc(n)}"></option>`).join('')}</datalist></div>
       <div><label for="f-name">Nombre *</label>
         <input type="text" id="f-name" required maxlength="40" value="${esc(d.name)}" placeholder="Ej: Monstera del living" /></div>
-      <label>¿Dónde está?</label>
+      <label>¿Cómo la cultivás?</label>
+      <div class="pchips">
+        <button type="button" class="pchip ${d.medium !== 'agua' ? 'on' : ''}" data-action="medium" data-id="tierra"><span>🌱</span>En tierra</button>
+        <button type="button" class="pchip ${d.medium === 'agua' ? 'on' : ''}" data-action="medium" data-id="agua"><span>💧</span>En agua (frasco)</button>
+      </div>
+      ${
+        (data.zones || []).length
+          ? `<label>Lugar en mi casa</label>
+      <div class="pchips" id="zone-chips">${zoneChipsHtml(d.zone)}</div>`
+          : ''
+      }
+      <label>¿Dónde está? <span class="sub">(tipo de lugar, para ajustar riego y clima)</span></label>
       <div class="pchips">${PLACEMENTS.map(
         (x) => `<button type="button" class="pchip ${d.placement === x.id ? 'on' : ''}" data-action="placement" data-id="${x.id}">
           <span>${x.icon}</span>${esc(x.label)}</button>`,
       ).join('')}</div>
       <div id="care-zone" class="stack">${careZoneHtml()}</div>
-      <div><label for="f-last">Último riego</label>
+      <div><label for="f-last">${d.medium === 'agua' ? 'Último cambio de agua' : 'Último riego'}</label>
         <input type="date" id="f-last" max="${dateStr()}" value="${esc(d.lastWatered)}" required /></div>
       <button class="btn block" type="submit" style="margin-top: 18px">${editing ? 'Guardar cambios' : 'Agregar planta'}</button>
       ${editing ? `<button class="btn danger block" type="button" data-action="delete" data-id="${d.id}">Eliminar planta</button>` : ''}
     </form>`;
+}
+
+function viewLugares() {
+  const zones = data.zones || [];
+  const rows = data.plants.map((p) => ({ p, a: assess(p, careOf(p), zones, data.climate) }));
+  const count = (st) => rows.filter((r) => r.a.state === st).length;
+  const toMove = rows.filter((r) => r.a.move && r.a.state !== 'sin-lugar');
+  const plantsHtml = rows.length
+    ? rows
+        .map(
+          ({ p, a }) => `<div class="card" style="padding: 12px; margin-top: 8px">
+        <b>${esc(p.name)}</b> ${a.zone ? '' : '<span class="chip soon">sin lugar</span>'}
+        <select data-zone-sel="${p.id}" style="margin-top: 6px">${zoneOptions(p.zone)}</select>
+        ${zoneAssessHtml(p)}</div>`,
+        )
+        .join('')
+    : '<p class="sub">Todavía no cargaste plantas.</p>';
+  const zoneEdit = zones
+    .map(
+      (z) => `<div class="card" style="padding: 12px; margin-top: 8px">
+        <input type="text" data-zid="${esc(z.id)}" data-zf="name" value="${esc(z.name)}" maxlength="60" aria-label="Nombre del lugar" />
+        <label style="margin-top: 8px">Luz que recibe</label>
+        <select data-zid="${esc(z.id)}" data-zf="light">${LIGHT_OPTIONS.map(([v, l]) => `<option value="${v}" ${Math.round(z.light) === v ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select>
+        <label class="check" style="margin-top: 8px"><input type="checkbox" data-zid="${esc(z.id)}" data-zf="outdoor" ${z.outdoor ? 'checked' : ''} /> Está afuera (le llega la lluvia y el frío)</label>
+        <label class="check"><input type="checkbox" data-zid="${esc(z.id)}" data-zf="hot" ${z.hot ? 'checked' : ''} /> Es un lugar caluroso (plantas que no toleran ~30 °C sufren)</label>
+        <label style="margin-top: 8px">Horas de sol (estimadas)</label>
+        <input type="text" data-zid="${esc(z.id)}" data-zf="sun" value="${esc(z.sun)}" maxlength="120" />
+        <label style="margin-top: 8px">Nota</label>
+        <input type="text" data-zid="${esc(z.id)}" data-zf="note" value="${esc(z.note)}" maxlength="200" />
+        <button class="btn danger block" style="margin-top: 8px" data-action="zone-del" data-id="${esc(z.id)}">Borrar este lugar</button></div>`,
+    )
+    .join('');
+  return `<div class="topbar">
+      <button class="icon-btn" data-action="back" aria-label="Volver">←</button>
+      <h1>Lugares de mi casa</h1></div>
+    <div class="card" style="padding: 16px">
+      <b>Resumen</b>
+      <p class="sub" style="margin: 4px 0 0">${count('bien')} bien ubicadas · ${count('ojo') + count('mal')} para revisar · ${count('sin-lugar')} sin lugar definido${count('sin-datos') ? ` · ${count('sin-datos')} sin datos de la especie` : ''}</p>
+      ${toMove.length ? `<p style="margin: 8px 0 0">➡️ <b>Conviene mover:</b> ${toMove.map((r) => `${esc(r.p.name)} → ${esc(r.a.move.zone.name)}`).join(' · ')}</p>` : ''}
+      <p class="hint" style="margin: 8px 0 0">Las horas de sol de cada lugar son estimaciones (armadas con fotos a distintas horas) y cambian con la estación. Corregilas abajo cuando veas algo distinto.</p>
+    </div>
+    <h2>Mis plantas</h2>${plantsHtml}
+    <h2>Los lugares</h2>${zoneEdit}
+    <div class="row" style="margin-top: 10px"><button class="btn secondary" data-action="zone-add">+ Agregar un lugar</button>
+      <button class="btn secondary" data-action="zone-reset">Recuperar los originales</button></div>`;
 }
 
 function viewSettings() {
@@ -856,6 +995,12 @@ function viewSettings() {
           : '<p class="sub">Todavía no hay especies.</p>'
       }
       ${online() && species.some((s) => !s.wiki) ? '<button class="btn secondary block" style="margin-top: 10px" data-action="sync-now">Completar ahora</button>' : ''}
+    </div>
+
+    <div class="card" style="padding: 16px; margin-top: 12px">
+      <b>🏡 Lugares de mi casa</b>
+      <p class="sub" style="margin: 4px 0 8px">Patio, borde de la ventana, planta baja y alta, con sus horas de sol. La app los usa para decirte si cada planta está bien ubicada y a dónde moverla.</p>
+      <button class="btn block" data-action="lugares">Ver y completar ubicaciones</button>
     </div>
 
     <div class="card" style="padding: 16px; margin-top: 12px">
@@ -1099,10 +1244,13 @@ function viewCalendar() {
 const novPrompt = (p) =>
   nov.mode === 'convert'
     ? buildConvertPrompt({ plant: p, text: nov.pasted })
-    : buildPrompt({
-    plant: p, care: careOf(p), placement: placementOf(p.placement), place: data.place, climate: data.climate,
-    text: nov.text, photoCount: nov.photos.length,
-  });
+    : withChatRule(
+        buildPrompt({
+          plant: p, care: careOf(p), placement: placementOf(p.placement), place: data.place, climate: data.climate,
+          text: nov.text, photoCount: nov.photos.length,
+          zone: zoneOf(data.zones, p.zone) ? `${zoneOf(data.zones, p.zone).name} (${zoneOf(data.zones, p.zone).sun})` : '',
+        }),
+      );
 
 function viewNovedad(p) {
   const head = `<div class="topbar">
@@ -1150,7 +1298,7 @@ function viewNovedad(p) {
     </div>
     <div class="card" style="padding: 16px; margin-top: 12px">
       <b>2. Traé la respuesta</b>
-      <p class="sub" style="margin: 4px 0 10px">Copiá toda la respuesta de Gemini y pegala acá.</p>
+      <p class="sub" style="margin: 4px 0 10px">⚠️ Si Gemini te hace preguntas, respondelas primero en su chat. Cuando no le queden dudas te manda el bloque final: <b>ese</b> es el que se pega acá.</p>
       <textarea id="nov-raw" rows="6" placeholder="Pegá la respuesta de Gemini">${esc(nov.raw)}</textarea>
       ${nov.msg ? `<p class="status warn" style="margin-top: 10px">${esc(nov.msg)}</p>` : ''}
       <button class="btn block" style="margin-top: 10px" data-action="nov-read">Leer respuesta</button>
@@ -1165,7 +1313,7 @@ function viewNovedad(p) {
       ${r.causa ? `<div><span class="sub">Causa probable</span><br /><b>${esc(r.causa)}</b></div>` : ''}
       <div style="margin-top: 8px"><span class="chip ${r.gravedad === 'seria' ? 'overdue' : r.gravedad === 'moderada' ? 'today' : 'ok'}">Gravedad ${esc(r.gravedad)}</span>
         <span class="chip soon">Confianza ${esc(r.confianza)}</span></div>
-      ${r.dudas.length ? `<p class="hint">Para estar más seguro: ${r.dudas.map(esc).join(' · ')}</p>` : ''}
+      ${r.dudas.length ? `<p class="status warn" style="margin-top: 8px">❓ Gemini quedó con dudas: ${r.dudas.map(esc).join(' · ')}. Si querés afinar el diagnóstico, respondelas en su chat y pegá acá el bloque nuevo.</p>` : ''}
       <p class="hint">Es una orientación de una IA, no un diagnóstico. Si se ve grave, consultá en un vivero.</p>
     </div>
     ${
@@ -1307,8 +1455,9 @@ function viewPjNew() {
       <b>1. Llevalo a Gemini</b>
       ${pj.photos.length ? '<button class="btn block" style="margin-top: 10px" data-action="pj-share">📤 Compartir fotos y pedido</button>' : ''}
       <button class="btn ${pj.photos.length ? 'secondary ' : ''}block" style="margin-top: 10px" data-action="pj-copy">📋 Copiar el pedido</button>
-      <details style="margin-top: 10px"><summary class="sub">Ver el pedido</summary><textarea rows="8" readonly>${esc(pjPrompt())}</textarea></details></div>
+      <details style="margin-top: 10px"><summary class="sub">Ver el pedido</summary><textarea rows="8" readonly>${esc(pjPrompt(true))}</textarea></details></div>
       <div class="card" style="padding: 16px; margin-top: 12px"><b>2. Traé la respuesta</b>
+      <p class="sub" style="margin: 4px 0 10px">⚠️ Si Gemini te hace preguntas, respondelas primero en su chat. Cuando no le queden dudas te manda el bloque final: <b>ese</b> es el que se pega acá.</p>
       <textarea id="pj-raw" rows="6" placeholder="Pegá la respuesta de Gemini">${esc(pj.raw)}</textarea>
       ${pj.msg ? `<p class="status warn" style="margin-top: 10px">${esc(pj.msg)}</p>` : ''}
       <button class="btn block" style="margin-top: 10px" data-action="pj-read">Leer respuesta</button>
@@ -1363,9 +1512,13 @@ function patchTask(id, tid, patch) {
   persist();
 }
 
-function pjPrompt() {
-  if (pj.updateId && getProject(pj.updateId)) return buildRevisionPrompt({ project: getProject(pj.updateId), news: pj.description, place: data.place, photoCount: pj.photos.length });
-  return buildPlanPrompt({ name: pj.name || 'Mi proyecto', description: pj.description, startDate: pj.startDate, place: data.place, climate: data.climate, photoCount: pj.photos.length, rescue: pj.rescue });
+/** manual=true: el pedido que se lleva a mano al chat de Gemini (ahí puede preguntar antes de responder). */
+function pjPrompt(manual = false) {
+  const base =
+    pj.updateId && getProject(pj.updateId)
+      ? buildRevisionPrompt({ project: getProject(pj.updateId), news: pj.description, place: data.place, photoCount: pj.photos.length })
+      : buildPlanPrompt({ name: pj.name || 'Mi proyecto', description: pj.description, startDate: pj.startDate, place: data.place, climate: data.climate, photoCount: pj.photos.length, rescue: pj.rescue });
+  return manual ? withChatRule(base) : base;
 }
 
 function syncPj() {
@@ -1694,13 +1847,14 @@ function render() {
   } else if (name === 'novedades') {
     if (!gn) gn = newGn();
     html = viewGeneral();
-  } else if (name === 'calendario') html = viewCalendar();
+  } else if (name === 'lugares') html = viewLugares();
+  else if (name === 'calendario') html = viewCalendar();
   else if (name === 'ajustes') html = viewSettings();
   else html = viewList();
 
   const keepScroll = window.scrollY;
   $app.innerHTML = html + soilSheet() + fbSheet();
-  if (['new', 'edit', 'ajustes', 'novedad', 'calendario', 'proyecto', 'novedades'].includes(name) && window.__keepScroll) window.scrollTo(0, keepScroll);
+  if (['new', 'edit', 'ajustes', 'novedad', 'calendario', 'proyecto', 'novedades', 'lugares', 'p'].includes(name) && window.__keepScroll) window.scrollTo(0, keepScroll);
   else window.scrollTo(0, 0);
   window.__keepScroll = false;
 }
@@ -1729,7 +1883,7 @@ function doWater(id) {
   const offset = daysBetween(nextDue(before), dateStr());
   data.plants = data.plants.map((x) => (x.id === id ? waterPlant(x) : x));
   persist();
-  toast(`💧 Anotado. Próximo riego: ${fmtDay(nextDue(getPlant(id)))}`);
+  toast(before.water ? `🔄 Anotado. Próximo cambio de agua: ${fmtDay(nextDue(getPlant(id)))}` : `💧 Anotado. Próximo riego: ${fmtDay(nextDue(getPlant(id)))}`);
   soilAsk = before.auto && before.baseDays ? { id, offset } : null;
   render();
 }
@@ -1792,8 +1946,9 @@ function savePlant() {
 
   const care = draftCare();
   const pl = placementOf(d.placement);
-  const auto = !!(care && d.auto);
-  const baseDays = care ? care.days : 0;
+  const isWater = d.medium === 'agua';
+  const auto = !isWater && !!(care && d.auto);
+  const baseDays = isWater || !care ? 0 : care.days;
   const everyDays = auto
     ? adjustedDays(baseDays, pl, data.climate?.avgTemp)
     : Math.max(1, Math.min(365, Number(d.everyDays) || 7));
@@ -1808,7 +1963,8 @@ function savePlant() {
       x.id === d.id
         ? {
             ...x, name, photo: d.photo, species: speciesLabel, sci: d.sci, genus: d.genus, family: d.family,
-            placement: d.placement, auto, baseDays, everyDays, lastWatered: d.lastWatered,
+            placement: d.placement, auto, baseDays, everyDays, lastWatered: d.lastWatered, water: isWater, zone: d.zone || '',
+            tasks: isWater && !(x.tasks || []).some((t) => t.source === 'agua') ? [...(x.tasks || []), cleaningTask()] : x.tasks,
           }
         : x,
     );
@@ -1822,8 +1978,9 @@ function savePlant() {
 
   const plant = newPlant({
     nid: data.nextNid, name, species: speciesLabel, photo: d.photo, sci: d.sci, genus: d.genus, family: d.family,
-    placement: d.placement, auto, baseDays, everyDays, lastWatered: d.lastWatered,
+    placement: d.placement, auto, baseDays, everyDays, lastWatered: d.lastWatered, water: isWater, zone: d.zone || '',
   });
+  if (isWater) plant.tasks = [cleaningTask()];
   data.nextNid += 1;
   data.plants.push(plant);
   persist();
@@ -1843,6 +2000,55 @@ $app.addEventListener('click', async (e) => {
     return doWater(id);
   }
   if (action === 'open') return go(`/p/${id}`);
+  if (action === 'lugares') return go('/lugares');
+  if (action === 'zone-add') {
+    data.zones = [...(data.zones || []), ...cleanZones([{ id: `z${Date.now().toString(36)}`, name: 'Nuevo lugar', light: 3, outdoor: false, hot: false, sun: '', note: '' }])];
+    persist({ resched: false });
+    return rerender();
+  }
+  if (action === 'zone-del') {
+    const z = zoneOf(data.zones, id);
+    if (!z || !confirm(`¿Borrar “${z.name}”? Las plantas que estén ahí quedan sin lugar definido.`)) return;
+    data.zones = data.zones.filter((x) => x.id !== id);
+    data.plants = data.plants.map((p) => (p.zone === id ? { ...p, zone: '' } : p));
+    persist({ resched: false });
+    return rerender();
+  }
+  if (action === 'zone-reset') {
+    const have = new Set((data.zones || []).map((z) => z.id));
+    const back = cleanZones(DEFAULT_ZONES).filter((z) => !have.has(z.id));
+    data.zones = [...(data.zones || []), ...back];
+    persist({ resched: false });
+    toast(back.length ? `Recuperé ${back.length} ${back.length === 1 ? 'lugar' : 'lugares'}` : 'Ya están todos los originales');
+    return rerender();
+  }
+  if (action === 'water-days') {
+    const n = Math.max(1, Math.min(60, Number(el.dataset.d) || 7));
+    data.plants = data.plants.map((x) => (x.id === id ? { ...x, everyDays: n } : x));
+    persist();
+    toast(`Ahora te aviso cada ${n} días`);
+    return rerender();
+  }
+  if (action === 'ask-water') {
+    const p = getPlant(id);
+    if (!p || waterBusy) return;
+    if (!online()) return toast('Necesito internet para consultar a Gemini.');
+    if (!(await ensureModel())) {
+      waterMsg = 'No pude validar la clave de Gemini.';
+      return rerender();
+    }
+    waterBusy = id;
+    waterMsg = '';
+    rerender();
+    const r = await askJson(buildWaterPrompt({ plant: p, sci: p.sci, place: data.place, climate: data.climate }), data.keys.gemini, data.keys.geminiModel);
+    waterBusy = '';
+    const w = r.error ? null : parseWater(r.text);
+    if (w) {
+      data.plants = data.plants.map((x) => (x.id === id ? { ...x, waterCare: w } : x));
+      persist({ resched: false });
+    } else waterMsg = r.error || 'No pude leer la respuesta de Gemini. Probá de nuevo.';
+    return rerender();
+  }
   if (action === 'gn-open') {
     gn = newGn();
     return go('/novedades');
@@ -1899,7 +2105,7 @@ $app.addEventListener('click', async (e) => {
   if (action === 'pj-share') {
     syncPj();
     try {
-      const r = await sharePhotosWithText(pjPrompt(), pj.photos, 'Proyecto de plantas');
+      const r = await sharePhotosWithText(pjPrompt(true), pj.photos, 'Proyecto de plantas');
       if (r === 'unsupported') toast('Compartir funciona en la app de Android. Usá “Copiar el pedido”.');
     } catch {
       toast('No pude compartir. Probá con “Copiar el pedido”.');
@@ -1949,7 +2155,7 @@ $app.addEventListener('click', async (e) => {
     return render();
   }
   if (action === 'pj-copy') {
-    const ok = await copyText(pjPrompt());
+    const ok = await copyText(pjPrompt(true));
     return toast(ok ? 'Pedido copiado. Pegalo en Gemini.' : 'No pude copiar. Abrí "Ver el pedido" y copialo a mano.');
   }
   if (action === 'pj-read') {
@@ -2040,6 +2246,22 @@ $app.addEventListener('click', async (e) => {
     syncDraft();
     draft.placement = id;
     return refreshCareZone();
+  }
+  if (action === 'medium') {
+    syncDraft();
+    if (draft.medium !== id) {
+      draft.medium = id;
+      if (id === 'agua') draft.everyDays = waterRenewDays(data.climate?.avgTemp);
+      else draft.everyDays = draftCare() ? adjustedDays(draftCare().days, placementOf(draft.placement), data.climate?.avgTemp) : 7;
+    }
+    return rerender();
+  }
+  if (action === 'zone-pick') {
+    syncDraft();
+    draft.zone = id || '';
+    const z = zoneOf(data.zones, draft.zone);
+    if (z) draft.placement = z.placement;
+    return rerender();
   }
   if (action === 'test-key') {
     const input = document.getElementById('s-key');
@@ -2460,8 +2682,30 @@ $app.addEventListener('click', async (e) => {
   if (action === 'pick-city') return setPlace(cityResults[Number(i)]);
 });
 
+/** Asigna el lugar de la casa a una planta (y el tipo de lugar que usa el riego). */
+function setZone(plantId, zoneId) {
+  const z = zoneOf(data.zones, zoneId);
+  data.plants = data.plants.map((x) => (x.id === plantId ? { ...x, zone: z ? z.id : '', ...(z ? { placement: z.placement } : {}) } : x));
+  applyClimate();
+  persist();
+  toast(z ? `Lugar: ${z.name}` : 'Lugar sin definir');
+  rerender();
+}
+
+/** Edita un dato de un lugar; las plantas que están ahí toman el nuevo tipo de lugar. */
+function patchZone(zid, field, value) {
+  data.zones = data.zones.map((z) => (z.id === zid ? cleanZones([{ ...z, [field]: value, placement: undefined }])[0] : z));
+  const nz = zoneOf(data.zones, zid);
+  if (nz) data.plants = data.plants.map((p) => (p.zone === zid ? { ...p, placement: nz.placement } : p));
+  applyClimate();
+  persist();
+  rerender();
+}
+
 $app.addEventListener('change', async (e) => {
   const t = e.target;
+  if (t.dataset?.zoneSel !== undefined && t.tagName === 'SELECT') return setZone(t.dataset.zoneSel, t.value);
+  if (t.dataset?.zid && t.dataset?.zf) return patchZone(t.dataset.zid, t.dataset.zf, t.type === 'checkbox' ? t.checked : t.value);
   if (t.id === 'photo-input' && t.files[0]) {
     try {
       await onPhoto(await fileToDataURL(t.files[0]));

@@ -2,6 +2,7 @@
 import { addDays, daysBetween, dateStr } from './logic.js';
 import { extractJson, makeTask } from './novedad.js';
 import { seasonOf } from './ai.js';
+import { looksLikeQuestions, QUESTIONS_MSG } from './chat.js';
 
 export const MAX_STAGES = 20;
 
@@ -112,7 +113,7 @@ const lines = (v, n, len = 220) => (Array.isArray(v) ? v : []).map((x) => text(S
 export function parsePlan(raw) {
   if (!String(raw || '').trim()) return { ok: false, error: 'Pegá primero la respuesta de Gemini.' };
   const j = extractJson(raw);
-  if (!j || typeof j !== 'object') return { ok: false, error: 'No pude leer el plan. Pedile a Gemini que responda solo con el bloque JSON y pegalo de nuevo.' };
+  if (!j || typeof j !== 'object') return { ok: false, error: looksLikeQuestions(raw) ? QUESTIONS_MSG : 'No pude leer el plan. Pedile a Gemini que responda solo con el bloque JSON y pegalo de nuevo.' };
   const etapas = (Array.isArray(j.etapas) ? j.etapas : [])
     .map((e) => {
       const dia = Math.round(Number(e?.dia));
