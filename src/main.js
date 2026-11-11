@@ -1467,7 +1467,7 @@ function viewPjNew() {
   const plan = pj.plan;
   const today = dateStr();
   const t = templateById(pj.templateId);
-  const srcText = plan.source === 'Gemini' ? `armado por Gemini (seguridad ${plan.confidence})` : 'plantilla general de la app, no una consulta a una IA';
+  const srcText = plan.source === 'Gemini' ? `armado por Gemini (seguridad ${plan.confidence})` : plan.source === 'Claude' ? `armado por Claude con lo que contaste (seguridad ${plan.confidence}); no es una consulta a Gemini` : 'plantilla general de la app, no una consulta a una IA';
   return `${head}<div class="card" style="padding: 16px">
       <b>${esc(pj.name)}</b> <span class="sub">· ${esc(srcText)}</span>
       ${plan.diagnostico ? `<p style="margin: 8px 0 0">🩺 <b>${esc(plan.diagnostico)}</b></p>` : ''}
@@ -1635,7 +1635,7 @@ function viewProject(j) {
   const first = photos[photos.length - 1];
   const last = photos[0];
   const tasks = [...(j.tasks || [])].sort((a, b) => a.due.localeCompare(b.due));
-  const src = j.plan.source === 'Gemini' ? `armado por Gemini (seguridad ${j.plan.confidence})` : 'plantilla general de la app';
+  const src = j.plan.source === 'Gemini' ? `armado por Gemini (seguridad ${j.plan.confidence})` : j.plan.source === 'Claude' ? `armado por Claude con lo que contaste (seguridad ${j.plan.confidence})` : 'plantilla general de la app';
   return `<div class="topbar"><button class="icon-btn" data-action="back" aria-label="Volver">←</button><h1>${esc(j.icon)} ${esc(j.name)}</h1></div>
     <div class="card" style="padding: 16px">
       <b>${j.done ? 'Proyecto terminado' : pr.notStarted ? `Empieza el ${esc(fmtDate(j.startDate))}` : `Día ${pr.day}${pr.total ? ` de ${pr.total}` : ''}`}</b>
