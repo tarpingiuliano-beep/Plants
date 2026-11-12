@@ -1448,6 +1448,7 @@ function viewPjNew() {
         <p class="hint">${pj.rescue ? 'Las fotos ayudan mucho: sacá la planta entera y de cerca las hojas o el tallo afectados. ' : 'Sumá fotos de lo que viste o querés replicar. '}${hasGemini() ? 'Si las usás, se envían a Google (Gemini): te aviso antes de mandarlas.' : 'Sin clave, las compartís vos con Gemini.'}</p>
         <p class="hint">Podés pegar el método que encontraste. ${hasGemini() ? 'Gemini arma el plan con fechas.' : 'Sin clave de Gemini te preparo un pedido para llevar a Gemini y traer la respuesta.'}</p>`}
       ${pj.msg ? `<p class="status warn" style="margin-top: 10px">${esc(pj.msg)}</p>` : ''}
+      ${pj.failed && !pj.busy ? '<button class="btn secondary block" style="margin-top: 10px" data-action="pj-manual">📋 Seguir a mano: copiar el pedido y pegar la respuesta de Gemini</button>' : ''}
       <button class="btn block" style="margin-top: 12px" data-action="pj-plan" ${pj.busy ? 'disabled' : ''}>${pj.busy ? 'Armando el plan…' : t ? 'Ver el plan' : hasGemini() ? (pj.updateId ? 'Armar el plan nuevo con Gemini' : 'Armar el plan con Gemini') : 'Armar el pedido'}</button>
     </div>`;
   }
@@ -1551,21 +1552,32 @@ async function pjMakePlan() {
   if (!online()) return ((pj.msg = 'Necesito internet para consultar a Gemini.'), render());
   if (pj.photos.length && !confirm(`Voy a enviar ${pj.photos.length} ${pj.photos.length === 1 ? 'foto' : 'fotos'} a Google (Gemini) para analizarlas.\n\nEn el plan gratuito, Google puede usar el contenido para mejorar sus productos y puede ser revisado por personas. No mando tu nombre ni tu ubicación exacta.\n\n¿Enviar?`)) return;
   pj.busy = true;
+  pj.failed = false;
   render();
+  let keyErr = null;
   if (!data.keys.geminiModel) {
-    const tk = await testGeminiKey(data.keys.gemini);
+    let tk = await testGeminiKey(data.keys.gemini);
+    if (!tk.ok && (tk.status === 0 || tk.status >= 500)) {
+      await new Promise((res) => setTimeout(res, 2500));
+      tk = await testGeminiKey(data.keys.gemini);
+    }
     if (tk.ok) data.keys.geminiModel = tk.model;
+    else keyErr = tk;
   }
-  const r = data.keys.geminiModel ? await askJson(pjPrompt(), data.keys.gemini, data.keys.geminiModel, pj.photos) : { error: 'No pude validar la clave de Gemini.' };
+  const r = data.keys.geminiModel
+    ? await askJson(pjPrompt(), data.keys.gemini, data.keys.geminiModel, pj.photos)
+    : { error: `No pude validar la clave de Gemini${keyErr ? ` (${keyErr.status ? `error ${keyErr.status}` : 'sin conexión'}${keyErr.msg ? `: ${keyErr.msg}` : ''})` : ''}.` };
   pj.busy = false;
   if (r.error) {
     if (/ 404/.test(r.error)) data.keys.geminiModel = '';
     pj.msg = r.error;
+    pj.failed = true;
     return render();
   }
   const pr = parsePlan(r.text);
   if (!pr.ok) {
     pj.msg = pr.error;
+    pj.failed = true;
     return render();
   }
   pj.plan = pr.plan;
@@ -1659,11 +1671,13 @@ function viewProject(j) {
               ${t.detail ? `<div class="sub" style="margin: 4px 0 8px">${esc(t.detail)}</div>` : ''}
               ${timeEditHtml(j.id, t)}
               <div class="row" style="margin-top: 8px"><button class="btn secondary" data-action="task-done" data-id="${j.id}" data-tid="${t.id}">✓ Hecha</button>
+              <button class="btn secondary" data-action="pj-task-photo" data-id="${j.id}" data-tid="${t.id}">📷 Foto</button>
               <button class="btn secondary" data-action="task-del" data-id="${j.id}" data-tid="${t.id}" aria-label="Borrar tarea">🗑</button></div></div>`;
             })
             .join('')
         : '<p class="sub">No hay tareas con aviso.</p>'
     }
+    <input type="file" id="pj-task-photo-input" accept="image/*" hidden />
     <h2>Cronología del plan</h2>
     <div class="card" style="padding: 14px">${j.plan.etapas
       .map((e) => {
@@ -1702,6 +1716,33 @@ async function addPjPhoto() {
     return;
   }
   rerender();
+}
+
+/** Foto desde una tarea del proyecto: queda en el diario, con el nombre de la tarea. No la marca como hecha. */
+let taskPhotoTarget = null;
+function saveTaskPhoto(id, tid, dataUrl) {
+  const j = getProject(id);
+  const t = (j?.tasks || []).find((k) => k.id === tid);
+  if (!j) return;
+  data.projects = data.projects.map((x) => (x.id === id ? addLog(x, { type: 'nota', text: `📷 ${t ? t.title : 'Foto del proyecto'}`, photo: dataUrl }) : x));
+  persist({ resched: false });
+  toast('Foto guardada en el diario 📷');
+  rerender();
+}
+
+async function addTaskPhoto(id, tid) {
+  taskPhotoTarget = { id, tid };
+  if (!isNative()) return document.getElementById('pj-task-photo-input')?.click();
+  try {
+    const ph = await Camera.getPhoto({
+      quality: 80, width: 1024, resultType: CameraResultType.DataUrl, source: CameraSource.Prompt,
+      promptLabelHeader: 'Foto del proyecto', promptLabelPhoto: 'Elegir de la galería',
+      promptLabelPicture: 'Sacar foto', promptLabelCancel: 'Cancelar',
+    });
+    if (ph.dataUrl) saveTaskPhoto(id, tid, await shrink(ph.dataUrl, 640));
+  } catch {
+    /* cancelado */
+  }
 }
 
 let pjNote = '';
@@ -2148,6 +2189,13 @@ $app.addEventListener('click', async (e) => {
     pj.step = 'form';
     return render();
   }
+  if (action === 'pj-manual') {
+    syncPj();
+    pj.msg = '';
+    pj.failed = false;
+    pj.step = 'ask';
+    return render();
+  }
   if (action === 'pj-plan') return pjMakePlan();
   if (action === 'pj-edit') {
     syncPj();
@@ -2173,6 +2221,7 @@ $app.addEventListener('click', async (e) => {
   }
   if (action === 'pj-create') return pjCreate();
   if (action === 'pj-add-photo') return addPjPhoto();
+  if (action === 'pj-task-photo') return addTaskPhoto(id, el.dataset.tid);
   if (action === 'pj-rm-photo') {
     syncPjNote();
     pjPhoto = null;
@@ -2760,6 +2809,15 @@ $app.addEventListener('change', async (e) => {
       syncPj();
       pj.photos.push(await shrink(await fileToDataURL(t.files[0]), 900));
       rerender();
+    } catch (err) {
+      toast(err.message);
+    }
+  }
+  if (t.id === 'pj-task-photo-input' && t.files[0] && taskPhotoTarget) {
+    try {
+      const { id, tid } = taskPhotoTarget;
+      saveTaskPhoto(id, tid, await shrink(await fileToDataURL(t.files[0]), 640));
+      t.value = '';
     } catch (err) {
       toast(err.message);
     }

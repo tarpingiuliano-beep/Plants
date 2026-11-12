@@ -80,7 +80,9 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 export const RETRY_WAITS = [3000, 6000, 10000];
 
 /** Llama a Gemini; si está saturado (503 y similares) reintenta y, si sigue, prueba un modelo liviano. */
-export async function gemPost(model, key, body, { waits = RETRY_WAITS, fallback = 'gemini-flash-lite-latest', f = netFetch } = {}) {
+export const FALLBACKS = ['gemini-flash-lite-latest', 'gemini-flash-latest', 'gemini-2.5-flash'];
+
+export async function gemPost(model, key, body, { waits = RETRY_WAITS, fallback = FALLBACKS, f = netFetch } = {}) {
   const call = (m) =>
     f(`${BASE}/models/${m}:generateContent`, { method: 'POST', headers: { 'x-goog-api-key': key, 'Content-Type': 'application/json' }, body });
   let res = await call(model);
@@ -88,12 +90,14 @@ export async function gemPost(model, key, body, { waits = RETRY_WAITS, fallback 
     await sleep(waits[i]);
     res = await call(model);
   }
-  if (BUSY.has(res.status) && fallback && fallback !== model) {
-    try {
-      const alt = await call(fallback);
-      if (alt.ok) return alt;
-    } catch {
-      /* me quedo con el error original */
+  if (BUSY.has(res.status)) {
+    for (const alt of [].concat(fallback || []).filter((m) => m && m !== model)) {
+      try {
+        const r = await call(alt);
+        if (r.ok) return r;
+      } catch {
+        /* sigo con el siguiente; si ninguno anda me quedo con el error original */
+      }
     }
   }
   return res;
@@ -115,8 +119,8 @@ export async function testGeminiKey(key) {
     if (!res.ok) return { ok: false, status: res.status, msg: await errMsg(res) };
     const model = pickModel((await res.json()).models);
     return model ? { ok: true, model } : { ok: false, status: 200, msg: 'No encontré un modelo disponible con esta clave.' };
-  } catch {
-    return { ok: false, status: 0, msg: 'No pude conectarme con Google.' };
+  } catch (e) {
+    return { ok: false, status: 0, msg: `No pude conectarme con Google. [${String(e?.message || e).slice(0, 90)}]` };
   }
 }
 
@@ -130,7 +134,7 @@ export async function askCare(ctx, key, model) {
     if (res.status === 429) return { error: 'Llegaste al límite gratuito de Gemini. Se reintenta más tarde.', quota: true };
     if (!res.ok) {
       const m = await errMsg(res);
-      return { error: BUSY.has(res.status) ? 'Gemini está saturado en este momento (es de Google, no de tu clave). Probá de nuevo en unos minutos.' : `Gemini respondió error ${res.status}${m ? `: ${m}` : ''}` };
+      return { error: BUSY.has(res.status) ? `Gemini está saturado en este momento (es de Google, no de tu clave). Probá de nuevo en unos minutos. [error ${res.status}]` : `Gemini respondió error ${res.status}${m ? `: ${m}` : ''}` };
     }
     const j = await res.json();
     const text = j.candidates?.[0]?.content?.parts?.map((p) => p.text || '').join('') || '';
@@ -222,7 +226,7 @@ export async function askExtra(ctx, key, model) {
     if (res.status === 429) return { error: 'Llegaste al límite gratuito de Gemini.', quota: true };
     if (!res.ok) {
       const m = await errMsg(res);
-      return { error: BUSY.has(res.status) ? 'Gemini está saturado en este momento (es de Google, no de tu clave). Probá de nuevo en unos minutos.' : `Gemini respondió error ${res.status}${m ? `: ${m}` : ''}` };
+      return { error: BUSY.has(res.status) ? `Gemini está saturado en este momento (es de Google, no de tu clave). Probá de nuevo en unos minutos. [error ${res.status}]` : `Gemini respondió error ${res.status}${m ? `: ${m}` : ''}` };
     }
     const j = await res.json();
     const t = j.candidates?.[0]?.content?.parts?.map((p) => p.text || '').join('') || '';
@@ -244,12 +248,12 @@ export async function askJson(prompt, key, model, images = []) {
     if (res.status === 429) return { error: 'Llegaste al límite gratuito de Gemini. Probá más tarde.', quota: true };
     if (!res.ok) {
       const m = await errMsg(res);
-      return { error: BUSY.has(res.status) ? 'Gemini está saturado en este momento (es de Google, no de tu clave). Probá de nuevo en unos minutos.' : `Gemini respondió error ${res.status}${m ? `: ${m}` : ''}` };
+      return { error: BUSY.has(res.status) ? `Gemini está saturado en este momento (es de Google, no de tu clave). Probá de nuevo en unos minutos. [error ${res.status}]` : `Gemini respondió error ${res.status}${m ? `: ${m}` : ''}` };
     }
     const j = await res.json();
     return { text: j.candidates?.[0]?.content?.parts?.map((p) => p.text || '').join('') || '' };
-  } catch {
-    return { error: 'No pude conectarme con Google.' };
+  } catch (e) {
+    return { error: `No pude conectarme con Google. [${String(e?.message || e).slice(0, 90)}]` };
   }
 }
 
