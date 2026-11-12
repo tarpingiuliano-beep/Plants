@@ -79,28 +79,54 @@ const BUSY = new Set([500, 502, 503, 504]);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 export const RETRY_WAITS = [3000, 6000, 10000];
 
-/** Llama a Gemini; si está saturado (503 y similares) reintenta y, si sigue, prueba un modelo liviano. */
+/** Llama a Gemini; si está saturado o no responde, reintenta y prueba otros modelos. Nunca pasa de `budgetMs` en total
+    (antes, con Gemini colgado, la app podía quedar "armando el plan" para siempre). */
 export const FALLBACKS = ['gemini-flash-lite-latest', 'gemini-flash-latest', 'gemini-2.5-flash'];
+export const ATTEMPT_MS = 45000;
+export const BUDGET_MS = 100000;
 
-export async function gemPost(model, key, body, { waits = RETRY_WAITS, fallback = FALLBACKS, f = netFetch } = {}) {
-  const call = (m) =>
-    f(`${BASE}/models/${m}:generateContent`, { method: 'POST', headers: { 'x-goog-api-key': key, 'Content-Type': 'application/json' }, body });
-  let res = await call(model);
-  for (let i = 0; BUSY.has(res.status) && i < waits.length; i++) {
+export async function gemPost(model, key, body, { waits = RETRY_WAITS, fallback = FALLBACKS, f = netFetch, attemptMs = ATTEMPT_MS, budgetMs = BUDGET_MS } = {}) {
+  const t0 = Date.now();
+  const left = () => budgetMs - (Date.now() - t0);
+  const call = (m) => {
+    const ms = Math.min(attemptMs, left());
+    if (ms <= 0) return Promise.reject(new Error('Gemini no respondió a tiempo'));
+    let to;
+    const lim = new Promise((_, rej) => {
+      to = setTimeout(() => rej(new Error('Gemini no respondió a tiempo')), ms);
+    });
+    return Promise.race([f(`${BASE}/models/${m}:generateContent`, { method: 'POST', headers: { 'x-goog-api-key': key, 'Content-Type': 'application/json' }, body }), lim]).finally(() => clearTimeout(to));
+  };
+  let res;
+  let err;
+  const attempt = async (m) => {
+    try {
+      res = await call(m);
+      err = null;
+    } catch (e) {
+      res = undefined;
+      err = e;
+    }
+  };
+  const failed = () => !res || BUSY.has(res.status);
+  await attempt(model);
+  for (let i = 0; failed() && i < waits.length && left() > waits[i]; i++) {
     await sleep(waits[i]);
-    res = await call(model);
+    await attempt(model);
   }
-  if (BUSY.has(res.status)) {
+  if (failed()) {
     for (const alt of [].concat(fallback || []).filter((m) => m && m !== model)) {
+      if (left() <= 0) break;
       try {
         const r = await call(alt);
         if (r.ok) return r;
       } catch {
-        /* sigo con el siguiente; si ninguno anda me quedo con el error original */
+        /* sigo con el siguiente */
       }
     }
   }
-  return res;
+  if (res) return res;
+  throw err || new Error('Gemini no respondió');
 }
 
 async function errMsg(res) {
@@ -253,7 +279,8 @@ export async function askJson(prompt, key, model, images = []) {
     const j = await res.json();
     return { text: j.candidates?.[0]?.content?.parts?.map((p) => p.text || '').join('') || '' };
   } catch (e) {
-    return { error: `No pude conectarme con Google. [${String(e?.message || e).slice(0, 90)}]` };
+    const m = String(e?.message || e).slice(0, 90);
+    return { error: /no respondi/i.test(m) ? `Gemini está tardando demasiado (lento o saturado). Probá de nuevo en unos minutos o seguí a mano. [${m}]` : `No pude conectarme con Google. [${m}]` };
   }
 }
 

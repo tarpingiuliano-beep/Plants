@@ -1449,7 +1449,7 @@ function viewPjNew() {
         <p class="hint">Podés pegar el método que encontraste. ${hasGemini() ? 'Gemini arma el plan con fechas.' : 'Sin clave de Gemini te preparo un pedido para llevar a Gemini y traer la respuesta.'}</p>`}
       ${pj.msg ? `<p class="status warn" style="margin-top: 10px">${esc(pj.msg)}</p>` : ''}
       ${pj.failed && !pj.busy ? '<button class="btn secondary block" style="margin-top: 10px" data-action="pj-manual">📋 Seguir a mano: copiar el pedido y pegar la respuesta de Gemini</button>' : ''}
-      <button class="btn block" style="margin-top: 12px" data-action="pj-plan" ${pj.busy ? 'disabled' : ''}>${pj.busy ? 'Armando el plan…' : t ? 'Ver el plan' : hasGemini() ? (pj.updateId ? 'Armar el plan nuevo con Gemini' : 'Armar el plan con Gemini') : 'Armar el pedido'}</button>
+      <button class="btn block" style="margin-top: 12px" data-action="pj-plan" ${pj.busy ? 'disabled' : ''}>${pj.busy ? 'Armando el plan… (hasta 2 min)' : t ? 'Ver el plan' : hasGemini() ? (pj.updateId ? 'Armar el plan nuevo con Gemini' : 'Armar el plan con Gemini') : 'Armar el pedido'}</button>
     </div>`;
   }
   if (pj.step === 'ask') {

@@ -26,3 +26,14 @@ test('no reintenta errores que no son de saturación', async () => {
   assert.equal(res.status, 400);
   assert.equal(n, 1);
 });
+
+test('si Gemini no responde nunca, corta y prueba otro modelo', async () => {
+  const f = (u) => (u.includes('lite') ? Promise.resolve(R(200)) : new Promise(() => {}));
+  const res = await gemPost('m', 'k', '{}', { waits: [], f, attemptMs: 30, budgetMs: 500 });
+  assert.equal(res.status, 200);
+});
+
+test('si nadie responde, devuelve error en vez de colgarse', async () => {
+  const f = () => new Promise(() => {});
+  await assert.rejects(gemPost('m', 'k', '{}', { waits: [10], f, attemptMs: 30, budgetMs: 200 }), /no respondi/);
+});
