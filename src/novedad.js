@@ -183,6 +183,25 @@ export function completeTask(tasks, id, today = dateStr()) {
 
 export const removeTask = (tasks, id) => tasks.filter((t) => t.id !== id);
 
+/** Próximo sábado desde `today` (si hoy es sábado, el que viene). */
+export function nextSaturday(today = dateStr()) {
+  const dow = new Date(`${today}T12:00:00`).getDay();
+  return addDays(today, ((6 - dow + 7) % 7) || 7);
+}
+
+/** Pasa a `target` toda tarea que vence antes de esa fecha. Las que ya caen después no se tocan. */
+export function postponeTasks(tasks, target) {
+  let moved = 0;
+  const out = (tasks || []).map((t) => {
+    if (t.due < target) {
+      moved++;
+      return { ...t, due: target };
+    }
+    return t;
+  });
+  return { tasks: out, moved };
+}
+
 export const taskState = (t, today = dateStr()) => {
   const d = daysBetween(today, t.due);
   return d < 0 ? 'late' : d === 0 ? 'today' : 'later';

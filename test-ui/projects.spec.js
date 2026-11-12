@@ -19,7 +19,7 @@ test('proyecto desde plantilla: crear con avisos, diario y tarea hecha', async (
   expect(document.getElementById('pj-name').value).toBe('Perales de semilla');
   document.getElementById('pj-bonsai').checked = true;
   const d = new Date(); d.setDate(d.getDate() - 10);
-  document.getElementById('pj-start').value = d.toISOString().slice(0, 10);
+  document.getElementById('pj-start').value = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
   click('[data-action="pj-plan"]'); await wait();
   expect(app.textContent).toContain('plantilla general de la app');
   expect(app.textContent).toContain('Armar la bolsa en la heladera');

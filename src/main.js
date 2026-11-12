@@ -16,7 +16,7 @@ import { waterRenewDays, WATER_TIPS, waterFit, cleaningTask, buildWaterPrompt, p
 import { DEFAULT_ZONES, LIGHT_OPTIONS, zoneOf, assess, placementFor, cleanZones, LEVEL_ICON } from './casa.js';
 import { shareTextFile, copyText, sharePhotosWithText } from './files.js';
 import {
-  MAX_PHOTOS, makeTask, buildPrompt, buildConvertPrompt, parseAnswer, tasksFromActions, completeTask, removeTask, taskState, taskText, dueTasks, buildTaskSchedule,
+  MAX_PHOTOS, makeTask, buildPrompt, buildConvertPrompt, parseAnswer, tasksFromActions, completeTask, removeTask, nextSaturday, postponeTasks, taskState, taskText, dueTasks, buildTaskSchedule,
 } from './novedad.js';
 import {
   dateStr,
@@ -476,7 +476,8 @@ function viewList() {
   if (due.length) {
     const first = due[0];
     banners.push(`<div class="banner"><span>📋 ${due.length === 1 ? '1 tarea para hoy' : `${due.length} tareas para hoy`}: ${esc(first.plant.name)} — ${esc(first.task.title)}${due.length > 1 ? '…' : ''}</span>
-      <button class="btn" data-action="open-any" data-id="${first.plant.id}">Ver</button></div>`);
+      <button class="btn" data-action="open-any" data-id="${first.plant.id}">Ver</button>
+      <button class="btn secondary" data-action="tasks-saturday">Pasar todo al sábado</button></div>`);
   }
   const noZone = (data.zones || []).length ? data.plants.filter((p) => !p.zone).length : 0;
   if (noZone) {
@@ -2408,6 +2409,20 @@ $app.addEventListener('click', async (e) => {
     const label = eventsOf(seasonOf(p) || {}).find((e) => e.kind === t.recheck)?.label || t.recheck;
     data.plants = data.plants.map((x) => (x.id === id ? { ...x, tasks: removeTask(x.tasks || [], t.id) } : x));
     fb = { id, kind: t.recheck, label, status: 'despues', reason: '', busy: false, result: null };
+    return render();
+  }
+  if (action === 'tasks-saturday') {
+    const target = nextSaturday(dateStr());
+    let moved = 0;
+    const mv = (x) => {
+      const r = postponeTasks(x.tasks || [], target);
+      moved += r.moved;
+      return r.moved ? { ...x, tasks: r.tasks } : x;
+    };
+    data.plants = data.plants.map(mv);
+    data.projects = data.projects.map((x) => (x.done ? x : mv(x)));
+    persist();
+    toast(moved ? `Listo: ${moved === 1 ? '1 tarea pasó' : `${moved} tareas pasaron`} al sábado ${fmtDay(target)}` : 'No había tareas para pasar');
     return render();
   }
   if (action === 'task-later') {

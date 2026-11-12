@@ -91,3 +91,15 @@ test('tarea de temporada: al repetirse salta al primer día de la próxima tempo
   const t2 = makeTask({ title: 'Abonar', due: '2026-09-10', every: 21, months: [9, 10, 11] });
   assert.equal(completeTask([t2], t2.id, '2026-09-10')[0].due, '2026-10-01');
 });
+
+import { nextSaturday as _ns, postponeTasks as _pp } from '../src/novedad.js';
+test('nextSaturday: miércoles → sábado; sábado → el siguiente', () => {
+  assert.equal(_ns('2026-11-11'), '2026-11-14');
+  assert.equal(_ns('2026-11-14'), '2026-11-21');
+  assert.equal(_ns('2026-11-15'), '2026-11-21');
+});
+test('postponeTasks mueve solo lo que vence antes del sábado', () => {
+  const r = _pp([{ id: 'a', due: '2026-11-10' }, { id: 'b', due: '2026-11-12' }, { id: 'c', due: '2026-11-14' }, { id: 'd', due: '2026-11-20' }], '2026-11-14');
+  assert.deepEqual(r.tasks.map((t) => t.due), ['2026-11-14', '2026-11-14', '2026-11-14', '2026-11-20']);
+  assert.equal(r.moved, 2);
+});
