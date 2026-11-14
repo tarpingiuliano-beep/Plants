@@ -476,8 +476,8 @@ function viewList() {
   if (due.length) {
     const first = due[0];
     banners.push(`<div class="banner"><span>📋 ${due.length === 1 ? '1 tarea para hoy' : `${due.length} tareas para hoy`}: ${esc(first.plant.name)} — ${esc(first.task.title)}${due.length > 1 ? '…' : ''}</span>
-      <button class="btn" data-action="open-any" data-id="${first.plant.id}">Ver</button>
-      <button class="btn secondary" data-action="tasks-saturday">Pasar todo al sábado</button></div>`);
+      <button class="btn" data-action="tareas">Ver resumen</button>
+      <button class="btn secondary" data-action="tasks-saturday">Pasar todo al sábado ${esc(fmtDay(nextSaturday(today)))}</button></div>`);
   }
   const noZone = (data.zones || []).length ? data.plants.filter((p) => !p.zone).length : 0;
   if (noZone) {
@@ -844,6 +844,49 @@ function viewForm() {
       <button class="btn block" type="submit" style="margin-top: 18px">${editing ? 'Guardar cambios' : 'Agregar planta'}</button>
       ${editing ? `<button class="btn danger block" type="button" data-action="delete" data-id="${d.id}">Eliminar planta</button>` : ''}
     </form>`;
+}
+
+/** Resumen de tareas: lo de hoy y atrasado, agrupado por planta o proyecto, y lo que viene en la semana. */
+function viewTareas() {
+  const today = dateStr();
+  const groups = (items) => {
+    const by = new Map();
+    for (const it of items) {
+      if (!by.has(it.plant.id)) by.set(it.plant.id, { h: it.plant, tasks: [] });
+      by.get(it.plant.id).tasks.push(it.task);
+    }
+    return [...by.values()];
+  };
+  const card = (h, t) => {
+    const isPj = !!getProject(h.id);
+    const short = (t.detail || '').length > 140 ? `${t.detail.slice(0, 140)}…` : t.detail || '';
+    return `<div class="card" style="padding: 12px; margin: 6px 0">
+      <b>${taskState(t, today) === 'late' ? '⏰' : '📋'} ${esc(t.title)}</b>
+      ${short ? `<p class="sub" style="margin: 4px 0 0">${esc(short)}</p>` : ''}
+      <div class="when">${esc(taskText(t, today, gTime()))}</div>
+      <div class="row" style="margin-top: 8px; flex-wrap: wrap">
+        <button class="btn secondary" data-action="task-done" data-id="${h.id}" data-tid="${t.id}">✓ Hecha</button>
+        <button class="btn secondary" data-action="task-move" data-to="1" data-id="${h.id}" data-tid="${t.id}">Mañana</button>
+        <button class="btn secondary" data-action="task-move" data-to="sat" data-id="${h.id}" data-tid="${t.id}">Sábado</button>
+        ${isPj ? `<button class="btn secondary" data-action="pj-task-photo" data-id="${h.id}" data-tid="${t.id}">📷 Foto</button>` : ''}
+      </div></div>`;
+  };
+  const block = (g) => `<div style="margin: 14px 0 4px"><a href="#/${getProject(g.h.id) ? 'proyecto' : 'p'}/${g.h.id}"><b>${getProject(g.h.id) ? esc(g.h.icon || '🌱') : '🌿'} ${esc(g.h.name)}</b></a> <span class="sub">· ${g.tasks.length === 1 ? '1 tarea' : `${g.tasks.length} tareas`}</span></div>${g.tasks.map((t) => card(g.h, t)).join('')}`;
+  const now = dueTasks(holders(), today);
+  const soon = [];
+  for (const h of holders()) for (const t of h.tasks || []) {
+    const d = daysBetween(today, t.due);
+    if (d > 0 && d <= 7) soon.push({ plant: h, task: t });
+  }
+  soon.sort((a, b) => a.task.due.localeCompare(b.task.due));
+  const ng = groups(now);
+  return `<div class="topbar">
+      <button class="icon-btn" data-action="back" aria-label="Volver">←</button>
+      <h1>Resumen de tareas</h1></div>
+    <p class="sub">${now.length ? `${now.length === 1 ? '1 tarea' : `${now.length} tareas`} de hoy o atrasadas, en ${ng.length === 1 ? '1 planta o proyecto' : `${ng.length} plantas o proyectos`}.` : '¡Todo al día por hoy! 🎉'}</p>
+    ${now.length ? `<button class="btn secondary block" data-action="tasks-saturday">Pasar todo al sábado ${esc(fmtDay(nextSaturday(today)))}</button>` : ''}
+    ${ng.map(block).join('')}
+    ${soon.length ? `<h2 style="margin-top: 20px">Esta semana</h2>${soon.map((it) => `<div class="card" style="padding: 12px; margin: 6px 0"><a href="#/${getProject(it.plant.id) ? 'proyecto' : 'p'}/${it.plant.id}"><b>${esc(it.plant.name)}</b></a> — ${esc(it.task.title)}<div class="when">${esc(taskText(it.task, today, gTime()))}</div></div>`).join('')}` : ''}`;
 }
 
 function viewLugares() {
@@ -1889,14 +1932,15 @@ function render() {
   } else if (name === 'novedades') {
     if (!gn) gn = newGn();
     html = viewGeneral();
-  } else if (name === 'lugares') html = viewLugares();
+  } else if (name === 'tareas') html = viewTareas();
+  else if (name === 'lugares') html = viewLugares();
   else if (name === 'calendario') html = viewCalendar();
   else if (name === 'ajustes') html = viewSettings();
   else html = viewList();
 
   const keepScroll = window.scrollY;
   $app.innerHTML = html + soilSheet() + fbSheet();
-  if (['new', 'edit', 'ajustes', 'novedad', 'calendario', 'proyecto', 'novedades', 'lugares', 'p'].includes(name) && window.__keepScroll) window.scrollTo(0, keepScroll);
+  if (['new', 'edit', 'ajustes', 'novedad', 'calendario', 'proyecto', 'novedades', 'lugares', 'tareas', 'p'].includes(name) && window.__keepScroll) window.scrollTo(0, keepScroll);
   else window.scrollTo(0, 0);
   window.__keepScroll = false;
 }
@@ -2043,6 +2087,17 @@ $app.addEventListener('click', async (e) => {
   }
   if (action === 'open') return go(`/p/${id}`);
   if (action === 'lugares') return go('/lugares');
+  if (action === 'tareas') return go('/tareas');
+  if (action === 'task-move') {
+    const target = el.dataset.to === 'sat' ? nextSaturday(dateStr()) : addDays(dateStr(), 1);
+    const mv = (x) => (x.id === id ? { ...x, tasks: (x.tasks || []).map((t) => (t.id === el.dataset.tid ? { ...t, due: target } : t)) } : x);
+    data.plants = data.plants.map(mv);
+    data.projects = data.projects.map(mv);
+    persist();
+    toast(`Pasó al ${el.dataset.to === 'sat' ? 'sábado' : 'mañana'} ${fmtDay(target)}`);
+    window.__keepScroll = true;
+    return render();
+  }
   if (action === 'zone-add') {
     data.zones = [...(data.zones || []), ...cleanZones([{ id: `z${Date.now().toString(36)}`, name: 'Nuevo lugar', light: 3, outdoor: false, hot: false, sun: '', note: '' }])];
     persist({ resched: false });
@@ -2472,6 +2527,7 @@ $app.addEventListener('click', async (e) => {
     data.projects = data.projects.map((x) => (x.done ? x : mv(x)));
     persist();
     toast(moved ? `Listo: ${moved === 1 ? '1 tarea pasó' : `${moved} tareas pasaron`} al sábado ${fmtDay(target)}` : 'No había tareas para pasar');
+    if (routeName() === 'tareas') window.__keepScroll = true;
     return render();
   }
   if (action === 'task-later') {
@@ -2645,6 +2701,7 @@ $app.addEventListener('click', async (e) => {
     data.projects = data.projects.map(upd);
     persist();
     toast(action === 'task-done' ? 'Tarea hecha ✓' : 'Tarea borrada');
+    if (routeName() === 'tareas') window.__keepScroll = true;
     return render();
   }
   if (action === 'test-gkey') {
