@@ -479,6 +479,12 @@ function viewList() {
       <button class="btn" data-action="tareas">Ver resumen</button>
       <button class="btn secondary" data-action="tasks-saturday">Pasar todo al sábado ${esc(fmtDay(nextSaturday(today)))}</button></div>`);
   }
+  if (data.undoMove) {
+    const n = Object.keys(data.undoMove.prev).length;
+    banners.unshift(`<div class="banner"><span>↩️ Pasaste ${n === 1 ? '1 tarea' : `${n} tareas`} al sábado ${esc(fmtDay(data.undoMove.target))}. ¿Fue sin querer?</span>
+      <button class="btn" data-action="undo-saturday">Deshacer</button>
+      <button class="btn secondary" data-action="undo-dismiss">Está bien</button></div>`);
+  }
   const noZone = (data.zones || []).length ? data.plants.filter((p) => !p.zone).length : 0;
   if (noZone) {
     banners.push(`<div class="banner"><span>📍 ${noZone === 1 ? '1 planta sin lugar definido' : `${noZone} plantas sin lugar definido`} en tu casa. Completalo y te digo si está bien ubicada.</span>
@@ -2517,17 +2523,41 @@ $app.addEventListener('click', async (e) => {
   }
   if (action === 'tasks-saturday') {
     const target = nextSaturday(dateStr());
+    const total = holders().reduce((n, x) => n + (x.tasks || []).filter((t) => t.due < target).length, 0);
+    if (!total) return toast('No había tareas para pasar');
+    if (!confirm(`¿Pasar ${total === 1 ? 'la tarea pendiente' : `las ${total} tareas pendientes`} al sábado ${fmtDay(target)}?\n\nDespués podés deshacerlo desde el aviso de la pantalla principal.`)) return;
+    const prev = {};
     let moved = 0;
     const mv = (x) => {
+      (x.tasks || []).forEach((t) => {
+        if (t.due < target) prev[t.id] = t.due;
+      });
       const r = postponeTasks(x.tasks || [], target);
       moved += r.moved;
       return r.moved ? { ...x, tasks: r.tasks } : x;
     };
     data.plants = data.plants.map(mv);
     data.projects = data.projects.map((x) => (x.done ? x : mv(x)));
+    data.undoMove = { target, prev, at: Date.now() };
     persist();
-    toast(moved ? `Listo: ${moved === 1 ? '1 tarea pasó' : `${moved} tareas pasaron`} al sábado ${fmtDay(target)}` : 'No había tareas para pasar');
+    toast(`Listo: ${moved === 1 ? '1 tarea pasó' : `${moved} tareas pasaron`} al sábado ${fmtDay(target)}`);
     if (routeName() === 'tareas') window.__keepScroll = true;
+    return render();
+  }
+  if (action === 'undo-saturday') {
+    const u = data.undoMove;
+    if (!u) return;
+    const back = (x) => ((x.tasks || []).some((t) => u.prev[t.id] && t.due === u.target) ? { ...x, tasks: x.tasks.map((t) => (u.prev[t.id] && t.due === u.target ? { ...t, due: u.prev[t.id] } : t)) } : x);
+    data.plants = data.plants.map(back);
+    data.projects = data.projects.map(back);
+    data.undoMove = null;
+    persist();
+    toast('Deshecho: las tareas volvieron a su fecha');
+    return render();
+  }
+  if (action === 'undo-dismiss') {
+    data.undoMove = null;
+    persist({ resched: false });
     return render();
   }
   if (action === 'task-later') {
@@ -2978,6 +3008,17 @@ document.addEventListener('visibilitychange', () => {
 
 (async function init() {
   data = await loadAsync();
+  // Rescate único: pasaron todo al sábado sin querer (14/11/2026) antes de existir "Deshacer"
+  if (!data.undoMove && !data.undoLegacy && dateStr() === '2026-11-14') {
+    const target = '2026-11-21';
+    const prev = {};
+    const isPlan = (t) => /patio|pleno sol|sol pleno/i.test(`${t.title} ${t.detail}`);
+    [...data.plants, ...data.projects].forEach((x) => (x.tasks || []).forEach((t) => {
+      if (t.due === target && !isPlan(t) && !t.every) prev[t.id] = '2026-11-14';
+    }));
+    data.undoLegacy = true;
+    if (Object.keys(prev).length >= 3) data.undoMove = { target, prev, at: Date.now() };
+  }
   try {
     navigator.storage?.persist?.(); // pide que Android no borre los datos si falta espacio
   } catch {

@@ -20,6 +20,10 @@ test('pasar todas las tareas pendientes al sábado', async () => {
   const app = document.getElementById('app');
   const btn = app.querySelector('[data-action="tasks-saturday"]');
   expect(btn).toBeTruthy();
+  window.confirm = () => false;
+  btn.click(); await wait();
+  expect(JSON.parse(localStorage.getItem('plantas.v1')).plants[0].tasks[0].due).toBe(d(0));
+  window.confirm = () => true;
   btn.click(); await wait();
   const s = JSON.parse(localStorage.getItem('plantas.v1'));
   const dues = [...s.plants[0].tasks.map((t) => t.due), s.projects[0].tasks[0].due];
@@ -27,4 +31,10 @@ test('pasar todas las tareas pendientes al sábado', async () => {
   expect(new Date(`${dues[0]}T12:00:00`).getDay()).toBe(6);
   expect(dues[0] > d(0)).toBe(true);
   expect(app.querySelector('[data-action="tasks-saturday"]')).toBeFalsy();
+  const u = app.querySelector('[data-action="undo-saturday"]');
+  expect(u).toBeTruthy();
+  u.click(); await wait();
+  const s2 = JSON.parse(localStorage.getItem('plantas.v1'));
+  expect(s2.plants[0].tasks.map((t) => t.due)).toEqual([d(0), d(-3)]);
+  expect(s2.projects[0].tasks[0].due).toBe(d(0));
 });

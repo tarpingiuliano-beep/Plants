@@ -36,6 +36,7 @@ test('Ver resumen muestra las tareas de todas las plantas y proyectos, y permite
   expect(s.plants[1].tasks.find((t) => t.id === 't3').due).toBe(d(1));
   expect(app.textContent).toContain('2 tareas de hoy o atrasadas');
   // todo al sábado vacía lo pendiente
+  window.confirm = () => true;
   click('[data-action="tasks-saturday"]'); await wait(60);
   expect(app.textContent).toContain('Todo al día por hoy');
 });
