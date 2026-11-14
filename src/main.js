@@ -860,18 +860,18 @@ function viewTareas() {
   const card = (h, t) => {
     const isPj = !!getProject(h.id);
     const short = (t.detail || '').length > 140 ? `${t.detail.slice(0, 140)}…` : t.detail || '';
-    return `<div class="card" style="padding: 12px; margin: 6px 0">
+    return `<div class="card task-card">
       <b>${taskState(t, today) === 'late' ? '⏰' : '📋'} ${esc(t.title)}</b>
       ${short ? `<p class="sub" style="margin: 4px 0 0">${esc(short)}</p>` : ''}
       <div class="when">${esc(taskText(t, today, gTime()))}</div>
-      <div class="row" style="margin-top: 8px; flex-wrap: wrap">
+      <div class="row">
         <button class="btn secondary" data-action="task-done" data-id="${h.id}" data-tid="${t.id}">✓ Hecha</button>
         <button class="btn secondary" data-action="task-move" data-to="1" data-id="${h.id}" data-tid="${t.id}">Mañana</button>
         <button class="btn secondary" data-action="task-move" data-to="sat" data-id="${h.id}" data-tid="${t.id}">Sábado</button>
         ${isPj ? `<button class="btn secondary" data-action="pj-task-photo" data-id="${h.id}" data-tid="${t.id}">📷 Foto</button>` : ''}
       </div></div>`;
   };
-  const block = (g) => `<div style="margin: 14px 0 4px"><a href="#/${getProject(g.h.id) ? 'proyecto' : 'p'}/${g.h.id}"><b>${getProject(g.h.id) ? esc(g.h.icon || '🌱') : '🌿'} ${esc(g.h.name)}</b></a> <span class="sub">· ${g.tasks.length === 1 ? '1 tarea' : `${g.tasks.length} tareas`}</span></div>${g.tasks.map((t) => card(g.h, t)).join('')}`;
+  const block = (g) => `<div class="grp"><a href="#/${getProject(g.h.id) ? 'proyecto' : 'p'}/${g.h.id}">${getProject(g.h.id) ? esc(g.h.icon || '🌱') : '🌿'} ${esc(g.h.name)}</a> <span class="sub">· ${g.tasks.length === 1 ? '1 tarea' : `${g.tasks.length} tareas`}</span></div>${g.tasks.map((t) => card(g.h, t)).join('')}`;
   const now = dueTasks(holders(), today);
   const soon = [];
   for (const h of holders()) for (const t of h.tasks || []) {
@@ -886,7 +886,7 @@ function viewTareas() {
     <p class="sub">${now.length ? `${now.length === 1 ? '1 tarea' : `${now.length} tareas`} de hoy o atrasadas, en ${ng.length === 1 ? '1 planta o proyecto' : `${ng.length} plantas o proyectos`}.` : '¡Todo al día por hoy! 🎉'}</p>
     ${now.length ? `<button class="btn secondary block" data-action="tasks-saturday">Pasar todo al sábado ${esc(fmtDay(nextSaturday(today)))}</button>` : ''}
     ${ng.map(block).join('')}
-    ${soon.length ? `<h2 style="margin-top: 20px">Esta semana</h2>${soon.map((it) => `<div class="card" style="padding: 12px; margin: 6px 0"><a href="#/${getProject(it.plant.id) ? 'proyecto' : 'p'}/${it.plant.id}"><b>${esc(it.plant.name)}</b></a> — ${esc(it.task.title)}<div class="when">${esc(taskText(it.task, today, gTime()))}</div></div>`).join('')}` : ''}`;
+    ${soon.length ? `<h2>Esta semana</h2>${soon.map((it) => `<div class="card task-card"><a href="#/${getProject(it.plant.id) ? 'proyecto' : 'p'}/${it.plant.id}"><b>${esc(it.plant.name)}</b></a> — ${esc(it.task.title)}<div class="when">${esc(taskText(it.task, today, gTime()))}</div></div>`).join('')}` : ''}`;
 }
 
 function viewLugares() {
