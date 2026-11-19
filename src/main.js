@@ -2210,6 +2210,7 @@ $app.addEventListener('click', async (e) => {
     try {
       const r = await sharePhotosWithText(pjPrompt(true), pj.photos, 'Proyecto de plantas');
       if (r === 'unsupported') toast('Compartir funciona en la app de Android. Usá “Copiar el pedido”.');
+      else if (r === 'shared') toast('Si en Gemini no aparece el texto, tocá el cuadro y pegá: ya quedó copiado 📋');
     } catch {
       toast('No pude compartir. Probá con “Copiar el pedido”.');
     }
@@ -2647,6 +2648,7 @@ $app.addEventListener('click', async (e) => {
       try {
         const r = await sharePhotosWithText(novPrompt(getPlant(nov.plantId)), nov.photos);
         if (r === 'unsupported') return toast('Compartir funciona en la app de Android. Usá “Copiar el pedido”.');
+        if (r === 'shared') toast('Si en Gemini no aparece el texto, tocá el cuadro y pegá: ya quedó copiado 📋');
       } catch {
         toast('No pude compartir. Probá con “Copiar el pedido”.');
       }

@@ -44,15 +44,36 @@ export async function copyText(text) {
   }
 }
 
-/** Comparte fotos + texto con otra app (por ejemplo Gemini). Devuelve 'shared' | 'cancelled' | 'unsupported'. */
+/** Borra las fotos que quedaron de compartidos anteriores. */
+async function cleanSharedPhotos() {
+  try {
+    const { files } = await Filesystem.readdir({ path: '', directory: Directory.Cache });
+    await Promise.all(
+      files
+        .filter((f) => /^novedad-.*\.jpg$/.test(f.name || f))
+        .map((f) => Filesystem.deleteFile({ path: f.name || f, directory: Directory.Cache }).catch(() => {})),
+    );
+  } catch {
+    /* no pasa nada */
+  }
+}
+
+/**
+ * Comparte fotos + texto con otra app (por ejemplo Gemini). Devuelve 'shared' | 'cancelled' | 'unsupported'.
+ * Gemini suele ignorar el texto cuando llegan fotos, así que el texto también queda copiado para pegarlo.
+ * Cada vez se usan nombres de archivo nuevos: con nombres fijos Android/Gemini volvían a mostrar las fotos de la primera vez.
+ */
 export async function sharePhotosWithText(text, dataUrls, title = 'Novedad de mi planta') {
   if (!Capacitor.isNativePlatform()) return 'unsupported';
+  await cleanSharedPhotos();
+  const stamp = Date.now().toString(36);
   const files = [];
   for (let i = 0; i < dataUrls.length; i++) {
     const b64 = String(dataUrls[i]).split(',')[1] || '';
-    const { uri } = await Filesystem.writeFile({ path: `novedad-${i + 1}.jpg`, data: b64, directory: Directory.Cache });
+    const { uri } = await Filesystem.writeFile({ path: `novedad-${stamp}-${i + 1}.jpg`, data: b64, directory: Directory.Cache });
     files.push(uri);
   }
+  await copyText(text);
   try {
     await Share.share({ title, text, files, dialogTitle: 'Compartir con Gemini' });
     return 'shared';
