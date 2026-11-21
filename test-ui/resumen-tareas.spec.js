@@ -23,7 +23,7 @@ test('Ver resumen muestra las tareas de todas las plantas y proyectos, y permite
   const app = document.getElementById('app');
   // el inicio muestra todo junto: atrasado y de hoy, con riegos y tareas
   expect(app.textContent).toContain('Para hoy');
-  expect(app.textContent).toContain('Atrasado');
+  expect(app.textContent).toContain('atrasadas');
   for (const txt of ['Agregar sustrato', 'Podar hojas secas', 'Limpiar bichos', 'Hacer esquejes']) expect(app.textContent).toContain(txt);
   expect(app.textContent).not.toContain('Revisar'); // la de dentro de 3 días no
   click('[data-action="tareas"]'); await wait(60);
