@@ -789,3 +789,21 @@ details[open] > summary {
   margin-top: 10px;
   flex-wrap: wrap;
 }
+
+/* ---------- Para hoy (inicio) ---------- */
+.card.hoy { padding: 14px 14px 12px; margin: 0 0 14px; }
+.card.hoy.ok { padding: 14px 16px; color: var(--green); }
+.hoy-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin-bottom: 6px; flex-wrap: wrap; }
+.hoy-head .sub { font-size: 13px; }
+.hoy-grp { padding: 10px 0 4px; border-top: 1px solid var(--line); }
+.hoy-grp > a { display: block; font-weight: 800; text-decoration: none; margin-bottom: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hoy-row { display: flex; align-items: center; gap: 8px; padding: 3px 0; }
+.hoy-txt { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; }
+.hoy-txt .what { font-size: 14px; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.late-tag { flex: none; font-size: 11px; font-weight: 700; color: var(--red); background: var(--red-soft); border-radius: 999px; padding: 1px 8px; }
+.hoy-row .btn { flex: none; min-width: 52px; min-height: 40px; padding: 0 14px; }
+.hoy-foot { margin-top: 10px; flex-wrap: wrap; gap: 8px; }
+.hoy-foot .btn { flex: 1 1 auto; min-height: 44px; font-size: 14px; }
+.g-prev { display: block; width: 96px; height: 96px; object-fit: cover; border-radius: 14px; margin-top: 8px; }
+details.card > summary { cursor: pointer; list-style: none; }
+details.card > summary::-webkit-details-marker { display: none; }

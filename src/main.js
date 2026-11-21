@@ -8,6 +8,7 @@ import { askCare, askExtra, askJson, testGeminiKey } from './ai.js';
 import { monthStartOf, isHidden, applyFeedback, buildFeedbackPrompt, parseFeedback, GENERIC_GUIDES, guideKindOf, buildGuidePrompt, parseGuide, startGuide, advanceGuide, retryStep, cancelGuide } from './guia.js';
 import { TEMPLATES, templateById, buildRevisionPrompt, applyRevision, buildPlanPrompt, parsePlan, stageTask, stageState, stageEnd, createProject, projectProgress, addLog } from './projects.js';
 import { taskTime } from './novedad.js';
+import { pendingItems, buildDailySummary, ensureTracks, summaryParts, TRACK_EVERY } from './hoy.js';
 import { KINDS, applyGeneral, buildGeneralPrompt, parseGeneral } from './general.js';
 import { MONTHS, eventsOf, eventsInMonth, digestText, buildMonthlyDigests, monthsText } from './extras.js';
 import { CLOUD_FILE, validRepo, cloudDue, pushBackup, pullBackup } from './cloud.js';
@@ -120,7 +121,11 @@ const getProject = (id) => data.projects.find((p) => p.id === id);
 const gTime = () => `${pad(data.settings.hour)}:${pad(data.settings.minute)}`;
 const hiddenFn = (p, ev, m) => isHidden(p, ev.kind, monthStartOf(m));
 const holders = () => [...data.plants, ...data.projects.filter((j) => !j.done)];
-const seasonOf = (p) => (p.sci ? data.species[p.sci]?.extra || null : null);
+// Solo la temporada de reproducción (esquejes, semillas, división…): abono, poda y trasplante ya no se muestran ni avisan
+const seasonOf = (p) => {
+  const ex = p.sci ? data.species[p.sci]?.extra : null;
+  return ex ? { ...ex, abono: null, poda: null, trasplante: null } : null;
+};
 const careOf = (p) => (p.sci ? data.species[p.sci]?.care || lookup(p.sci, p.genus, p.family) : null);
 
 /** Avisos de helada/frío para las notificaciones */
@@ -128,12 +133,14 @@ const extraAlerts = () => [
   ...buildColdAlerts(data.plants, data.climate, careOf, placementOf),
   ...buildHeatAlerts(data.plants, data.climate, careOf, placementOf),
   ...buildStormAlerts(data.plants, data.climate, placementOf),
-  ...buildTaskSchedule(holders(), new Date(), gTime()),
-  ...(data.settings.seasonAlerts === false ? [] : buildMonthlyDigests(data.plants, seasonOf, new Date(), 12, hiddenFn)),
+  ...(data.settings.notifMode === 'separados'
+    ? buildTaskSchedule(holders(), new Date(), gTime())
+    : buildDailySummary(data.plants, data.projects, data.settings)),
 ];
 
 function persist({ resched = true } = {}) {
   applyClimate();
+  data.plants = ensureTracks(data.plants, dateStr());
   if (!save(data)) toast('⚠️ No hay espacio para guardar. Probá con fotos más chicas.');
   if (resched) reschedule(data.plants, data.settings, extraAlerts());
 }
@@ -459,6 +466,52 @@ function maybeAutoBackup() {
   if (online() && cloudDue(data.keys, data.lastCloudBackup, new Date(), data.keys.githubAuto !== false)) cloudBackup(false);
 }
 
+/** Todo lo pendiente en un solo pantallazo: lo atrasado y lo de hoy (riegos, tareas y mediciones). */
+function hoyPanelHtml(today) {
+  if (!data.plants.length && !data.projects.length) return '';
+  const r = pendingItems(data.plants, data.projects, today);
+  if (!r.all.length) return '<div class="card hoy ok"><b>✅ Todo al día por hoy</b></div>';
+  const isProj = (h) => !!getProject(h.id);
+  const line = (i) => {
+    const h = i.holder;
+    let what;
+    let btn;
+    if (i.kind === 'water') {
+      what = h.water ? '🔄 Renovar el agua' : '💧 Regar';
+      btn = `<button class="btn secondary" data-action="water" data-id="${h.id}" aria-label="Ya lo hice">✓</button>`;
+    } else if (i.kind === 'measure') {
+      what = '📏 Medir y sacar foto';
+      btn = `<button class="btn secondary" data-action="grow-open" data-id="${h.id}">Medir</button>`;
+    } else {
+      what = `⏰ ${esc(i.task.title)}`;
+      btn = `<button class="btn secondary" data-action="task-done" data-id="${h.id}" data-tid="${i.task.id}" aria-label="Hecha">✓</button>`;
+    }
+    const late = i.late > 0 ? `<span class="late-tag">${i.late === 1 ? 'ayer' : `${i.late} d`}</span>` : '';
+    return `<div class="hoy-row"><div class="hoy-txt"><span class="what">${what}</span>${late}</div>${btn}</div>`;
+  };
+  // un bloque por planta o proyecto, con lo más atrasado primero
+  const groups = [];
+  for (const i of r.all) {
+    let g = groups.find((x) => x.h.id === i.holder.id);
+    if (!g) groups.push((g = { h: i.holder, items: [], worst: 0 }));
+    g.items.push(i);
+    g.worst = Math.max(g.worst, i.late);
+  }
+  groups.sort((a, b) => b.worst - a.worst);
+  const block = (g) => {
+    const h = g.h;
+    const href = `#/${getProject(h.id) ? 'proyecto' : 'p'}/${h.id}`;
+    return `<div class="hoy-grp"><a href="${href}">${getProject(h.id) ? `${esc(h.icon || '🌱')} ` : ''}${esc(h.name)}</a>${g.items.map(line).join('')}</div>`;
+  };
+  const hasTasks = r.all.some((i) => i.kind === 'task');
+  return `<div class="card hoy">
+      <div class="hoy-head"><b>📋 Para hoy</b><span class="sub">${esc([...summaryParts(r.all), r.late.length ? `${r.late.length} atrasadas` : ''].filter(Boolean).join(' · '))}</span></div>
+      ${groups.map(block).join('')}
+      ${hasTasks ? `<div class="row hoy-foot"><button class="btn secondary" data-action="tareas">Ver con detalles</button>
+        <button class="btn secondary" data-action="tasks-saturday">Todas las tareas al sábado ${esc(fmtDay(nextSaturday(today)))}</button></div>` : ''}
+    </div>`;
+}
+
 function viewList() {
   const today = dateStr();
   const plants = sortPlants(data.plants, today);
@@ -471,13 +524,6 @@ function viewList() {
   if (!cloudOn() && needsBackupReminder(data.plants.length, data.lastBackup)) {
     banners.push(`<div class="banner"><span>💾 ${data.lastBackup ? 'Hace rato que no hacés un respaldo.' : 'Todavía no hiciste un respaldo de tus plantas.'}</span>
       <button class="btn" data-action="settings">Respaldar</button></div>`);
-  }
-  const due = dueTasks(holders(), today);
-  if (due.length) {
-    const first = due[0];
-    banners.push(`<div class="banner"><span>📋 ${due.length === 1 ? '1 tarea para hoy' : `${due.length} tareas para hoy`}: ${esc(first.plant.name)} — ${esc(first.task.title)}${due.length > 1 ? '…' : ''}</span>
-      <button class="btn" data-action="tareas">Ver resumen</button>
-      <button class="btn secondary" data-action="tasks-saturday">Pasar todo al sábado ${esc(fmtDay(nextSaturday(today)))}</button></div>`);
   }
   if (data.undoMove) {
     const n = Object.keys(data.undoMove.prev).length;
@@ -493,11 +539,6 @@ function viewList() {
   if (!data.place) {
     banners.push(`<div class="banner"><span>📍 Elegí dónde vivís y ajusto el riego al clima de tu zona.</span>
       <button class="btn" data-action="settings">Elegir</button></div>`);
-  }
-  const monthItems = data.settings.seasonAlerts === false ? [] : eventsInMonth(data.plants, seasonOf, thisMonth(), hiddenFn);
-  if (monthItems.length) {
-    banners.push(`<div class="banner"><span>🌿 Este mes: ${esc(digestText(monthItems))}</span>
-      <button class="btn" data-action="calendar">Ver</button></div>`);
   }
   const c = data.climate;
   if (c) {
@@ -559,6 +600,7 @@ function viewList() {
       <button class="icon-btn" data-action="settings" aria-label="Ajustes">⚙️</button></div></div>
     ${data.place ? `<p class="sub" style="margin: -6px 0 12px">${weatherLine()}</p>` : ''}
     ${banners.join('')}
+    ${hoyPanelHtml(today)}
     ${plants.length ? cards : empty}
     ${projectsListHtml()}
     <button class="fab" data-action="new" aria-label="Agregar planta">+</button>`;
@@ -719,6 +761,7 @@ function viewDetail(p) {
     </div>
     ${zoneCardHtml(p)}
     ${p.water ? waterCardHtml(p) : care ? `<div style="margin-top: 12px">${careCardHtml(care, placementOf(p.placement), { wiki: sp?.wiki })}</div>` : ''}
+    ${growthCardHtml(p)}
     ${seasonCardHtml(p)}
     ${guideCardHtml(p)}
     ${tasksHtml}
@@ -997,7 +1040,7 @@ function viewSettings() {
     <div class="card" style="padding: 16px; margin-top: 12px">
       <label for="s-time" style="margin-top: 0">Hora de todos los avisos</label>
       <input type="time" id="s-time" value="${pad(data.settings.hour)}:${pad(data.settings.minute)}" />
-      <p class="hint">Riego, tareas y proyectos salen a esta hora, y si se te pasa te insisto los 3 días siguientes. Cambiarla acá cambia todos los avisos juntos. Si alguna tarea necesita otra hora, o dos por día, se lo ponés a esa tarea. Las alertas de calor, helada y tormenta y el resumen mensual tienen su horario propio.</p>
+      <p class="hint">El aviso de la mañana (riegos, tareas y mediciones pendientes) sale a esta hora y se repite cada día mientras quede algo sin hacer. En el modo de un aviso por cosa, la hora de cada tarea se puede cambiar en la propia tarea. Las alertas de calor, helada y tormenta tienen su horario propio.</p>
       <p style="margin-bottom: 8px">${permText}</p>
       <div class="stack">
         ${native && perm !== 'granted' ? '<button class="btn block" data-action="ask-perm">Activar notificaciones</button>' : ''}
@@ -1006,12 +1049,12 @@ function viewSettings() {
     </div>
 
     <div class="card" style="padding: 16px; margin-top: 12px">
-      <b>🪱 Mi abono y avisos de temporada</b>
-      <label for="s-fert" style="margin-top: 10px">Abono que tengo en casa</label>
-      <input type="text" id="s-fert" value="${esc(data.settings.myFertilizer || '')}" maxlength="80" placeholder="Ej: humus de lombriz" />
-      <p class="hint">Se lo cuento a Gemini para que te diga cuánto y cada cuánto usarlo en cada planta. Si lo cambiás, actualizo las recomendaciones.</p>
-      <label class="check" style="margin-top: 10px"><input type="checkbox" id="s-season" ${data.settings.seasonAlerts === false ? '' : 'checked'} />
-        <span>Avisarme el día 1 de cada mes lo que toca (abonar, podar, esquejes, semillas…)</span></label>
+      <b>🔔 Cómo te aviso</b>
+      <select id="s-notif" style="margin-top: 10px">
+        <option value="resumen" ${data.settings.notifMode === 'separados' ? '' : 'selected'}>Un solo aviso por la mañana con todo lo pendiente (recomendado)</option>
+        <option value="separados" ${data.settings.notifMode === 'separados' ? 'selected' : ''}>Un aviso por cada planta y tarea</option>
+      </select>
+      <p class="hint">Con el resumen, al tocar el aviso se abre el inicio y ves todo junto: lo atrasado y lo de hoy. Las alertas de helada, calor y tormenta siguen llegando aparte.</p>
     </div>
 
     <div class="card" style="padding: 16px; margin-top: 12px">
@@ -1101,44 +1144,61 @@ function viewSettings() {
 
 const thisMonth = () => new Date().getMonth() + 1;
 
+const REPRO_KINDS = ['sembrar', 'esquejes', 'dividir', 'hijuelos', 'acodo', 'semillas'];
+
+/** Temporada de reproducción de la especie y botones para empezar un proyecto cuando yo quiera. */
 function seasonCardHtml(p) {
   const ex = seasonOf(p);
-  if (!ex) {
-    if (!p.sci) return '';
-    return `<div class="card" style="padding: 14px; margin-top: 12px"><b>🌱 Cuidados de temporada</b>
-      <p class="sub" style="margin: 4px 0 0">${
-        data.keys.gemini
-          ? 'Pendiente: la voy a pedir a Gemini en cuanto haya conexión.'
-          : 'Cargá la clave de Gemini en Ajustes y te digo cuándo abonar, podar, hacer esquejes y sacar semillas de esta planta.'
-      }</p></div>`;
-  }
-  const events = eventsOf(ex);
+  const events = ex ? eventsOf(ex).filter((e) => REPRO_KINDS.includes(e.kind)) : [];
   const now = thisMonth();
-  const today = dateStr();
-  const active = events.filter((e) => e.months.includes(now) && !isHidden(p, e.kind, today));
-  const paused = events.filter((e) => p.seasonLog?.[e.kind] && isHidden(p, e.kind, today));
-  const abono = ex.abono?.cadaDias
-    ? `<button class="btn secondary block" style="margin-top: 10px" data-action="abono-task" data-id="${p.id}">⏰ Recordarme abonar cada ${ex.abono.cadaDias} días (solo en temporada)</button>`
-    : '';
+  const lines = events.length
+    ? events.map((e) => `<div class="ev"><b>${e.icon} ${esc(e.label)}</b> <span class="sub">${esc(monthsText(e.months))}${e.months.includes(now) ? ' · ahora es temporada' : ''}</span></div>`).join('')
+    : `<p class="sub" style="margin: 6px 0 0">${p.sci ? (data.keys.gemini ? 'Todavía no tengo la temporada de esta especie; la pido a Gemini cuando haya conexión.' : 'Con la clave de Gemini (Ajustes) te muestro en qué meses se pueden sacar esquejes y semillas de esta planta.') : 'Cuando la planta tenga especie te muestro su temporada.'}</p>`;
   return `<div class="card season" style="padding: 14px; margin-top: 12px">
-      <div class="care-head"><b>🌱 Cuidados de temporada</b>
-        <span class="sub">Gemini · seguridad ${esc(ex.confidence)}</span></div>
-      <p class="sub" style="margin: 6px 0 4px">${MONTHS[now - 1][0].toUpperCase()}${MONTHS[now - 1].slice(1)}: ${active.length ? 'esto toca ahora' : 'no hay nada especial este mes'}</p>
-      ${active.map((e) => eventLine(e, true) + evActions(p, e)).join('')}
-      ${paused
-        .map((e) => {
-          const l = p.seasonLog[e.kind];
-          const what = l.status === 'hecho' ? 'hecho' : l.status === 'despues' ? 'todavía no' : 'este año no';
-          return `<div class="ev"><span class="sub">⏸ <b>${esc(e.label)}</b>: ${what}${l.reason ? ` (${esc(l.reason)})` : ''}. Vuelve a aparecer el ${esc(fmtDay(l.until))}.${l.queMirar ? ` Qué mirar: ${esc(l.queMirar)}` : ''}${l.ai ? ' · Gemini' : ''}</span></div>`;
-        })
-        .join('')}
-      ${p.stage ? `<p class="sub" style="margin: 6px 0 0">Etapa de la planta: <b>${esc(p.stage)}</b> (según lo que contaste)</p>` : ''}
-      ${abono}
-      <details style="margin-top: 10px"><summary class="sub">Todo el año, reproducción y plagas</summary>
-        ${events.map((e) => eventLine(e, false)).join('')}
-        ${ex.plagas.length ? `<div class="ev"><b>🐛 Plagas</b><ul class="notes">${ex.plagas.map((x) => `<li>${esc(x)}</li>`).join('')}</ul></div>` : ''}
-        <p class="hint">Es una guía de una IA para tu zona: confirmá con tu planta y, ante la duda, probá en una sola rama o maceta.</p>
-      </details></div>`;
+      <div class="care-head"><b>✂️ Multiplicar esta planta</b>${ex ? `<span class="sub">Gemini · seguridad ${esc(ex.confidence)}</span>` : ''}</div>
+      ${lines}
+      <div class="row" style="margin-top: 10px; flex-wrap: wrap; gap: 8px">
+        <button class="btn" data-action="multiply" data-id="${p.id}" data-kind="esqueje">✂️ Sacar esquejes</button>
+        <button class="btn secondary" data-action="multiply" data-id="${p.id}" data-kind="semilla">🌰 Sacar semillas</button>
+      </div>
+      <p class="hint" style="margin: 8px 0 0">Armo un proyecto con pasos y avisos cuando vos lo decidas; no te lo recomiendo yo.</p></div>`;
+}
+
+let growPhoto = '';
+let growOpen = '';
+
+function showGrowPhoto() {
+  const box = document.getElementById('g-photo-prev');
+  if (box) box.innerHTML = growPhoto ? `<img src="${growPhoto}" alt="" class="g-prev" />` : '';
+}
+
+/** Medidas y fotos para ver cómo crece cada planta. */
+function growthCardHtml(p) {
+  const today = dateStr();
+  const tr = p.track || { every: TRACK_EVERY, next: today, on: true };
+  const list = p.growth || [];
+  const due = tr.on !== false && daysBetween(today, tr.next) <= 0;
+  const last = list[0];
+  const withCm = list.filter((g) => Number.isFinite(g.cm));
+  const delta = withCm.length >= 2 ? withCm[0].cm - withCm[withCm.length - 1].cm : null;
+  const sub = tr.on === false ? 'sin pedidos' : due ? 'toca medirla' : `próxima: ${fmtDay(tr.next)}`;
+  const opts = [[7, 'cada semana'], [15, 'cada 15 días'], [30, 'cada mes'], [60, 'cada 2 meses'], [90, 'cada 3 meses'], [0, 'no pedirme']]
+    .map(([v, l]) => `<option value="${v}" ${(tr.on === false ? 0 : tr.every) === v ? 'selected' : ''}>${l}</option>`)
+    .join('');
+  return `<details class="card" id="grow-box" style="padding: 14px; margin-top: 12px" ${due || growOpen === p.id ? 'open' : ''}>
+      <summary><b>📏 Crecimiento</b> <span class="sub">· ${esc(sub)}${last && Number.isFinite(last.cm) ? ` · última: ${last.cm} cm` : ''}</span></summary>
+      <div style="margin-top: 10px">
+        <div class="row"><input type="number" id="g-cm" inputmode="decimal" step="0.5" min="0" placeholder="Altura en cm" />
+          <button class="btn secondary" style="flex: none" data-action="grow-photo" data-id="${p.id}">📷 Foto</button></div>
+        <div id="g-photo-prev">${growPhoto ? `<img src="${growPhoto}" alt="" class="g-prev" />` : ''}</div>
+        <input type="text" id="g-note" maxlength="140" placeholder="Nota (hojas nuevas, flores…)" style="margin-top: 8px" />
+        <input type="file" id="g-photo-input" accept="image/*" hidden />
+        <button class="btn block" style="margin-top: 8px" data-action="grow-save" data-id="${p.id}">Guardar medida</button>
+        ${delta !== null ? `<p class="sub" style="margin: 10px 0 0">Desde ${esc(fmtDay(withCm[withCm.length - 1].date))} creció <b>${delta >= 0 ? '+' : ''}${Math.round(delta * 10) / 10} cm</b>.</p>` : ''}
+        ${list.length ? `<ul class="history" style="margin-top: 8px">${list.slice(0, 8).map((g) => `<li><span>📏</span><div><div>${Number.isFinite(g.cm) ? `<b>${g.cm} cm</b>` : 'Foto'}${g.note ? ` — ${esc(g.note)}` : ''}</div>${g.photo ? `<div class="thumbs"><img src="${g.photo}" alt="" /></div>` : ''}<div class="when">${esc(fmtDay(g.date))}</div></div></li>`).join('')}</ul>` : ''}
+        <label for="g-every" style="margin-top: 10px">Pedirme una medida</label>
+        <select id="g-every" data-id="${p.id}">${opts}</select>
+      </div></details>`;
 }
 
 function evActions(p, e) {
@@ -1946,9 +2006,10 @@ function render() {
 
   const keepScroll = window.scrollY;
   $app.innerHTML = html + soilSheet() + fbSheet();
-  if (['new', 'edit', 'ajustes', 'novedad', 'calendario', 'proyecto', 'novedades', 'lugares', 'tareas', 'p'].includes(name) && window.__keepScroll) window.scrollTo(0, keepScroll);
+  if (['', 'new', 'edit', 'ajustes', 'novedad', 'calendario', 'proyecto', 'novedades', 'lugares', 'tareas', 'p'].includes(name || '') && window.__keepScroll) window.scrollTo(0, keepScroll);
   else window.scrollTo(0, 0);
   window.__keepScroll = false;
+  if (growOpen && name === 'p') document.getElementById('grow-box')?.scrollIntoView?.({ block: 'center' });
 }
 
 window.addEventListener('hashchange', render);
@@ -2089,9 +2150,64 @@ $app.addEventListener('click', async (e) => {
 
   if (action === 'water') {
     e.stopPropagation();
+    if (routeName() === '') window.__keepScroll = true;
     return doWater(id);
   }
   if (action === 'open') return go(`/p/${id}`);
+  if (action === 'grow-open') {
+    growOpen = id;
+    return go(`/p/${id}`);
+  }
+  if (action === 'grow-photo') {
+    if (!isNative()) return document.getElementById('g-photo-input')?.click();
+    try {
+      const ph = await Camera.getPhoto({
+        quality: 80, width: 1024, resultType: CameraResultType.DataUrl, source: CameraSource.Prompt,
+        promptLabelHeader: 'Foto de la planta', promptLabelPhoto: 'Elegir de la galería',
+        promptLabelPicture: 'Sacar foto', promptLabelCancel: 'Cancelar',
+      });
+      if (ph.dataUrl) {
+        growPhoto = await shrink(ph.dataUrl, 640);
+        showGrowPhoto();
+      }
+    } catch {
+      /* canceló */
+    }
+    return;
+  }
+  if (action === 'grow-save') {
+    const p = getPlant(id);
+    if (!p) return;
+    const raw = document.getElementById('g-cm')?.value.trim().replace(',', '.');
+    const cm = raw ? Number(raw) : null;
+    if (cm !== null && !(Number.isFinite(cm) && cm >= 0 && cm < 5000)) return toast('Escribí la altura en centímetros (por ejemplo 25).');
+    if (cm === null && !growPhoto) return toast('Cargá la altura o una foto.');
+    const note = (document.getElementById('g-note')?.value || '').trim().slice(0, 140);
+    const entry = { date: dateStr(), cm, note, photo: growPhoto };
+    const tr = p.track || { every: TRACK_EVERY, next: dateStr(), on: true };
+    data.plants = data.plants.map((x) => (x.id === id ? { ...x, growth: [entry, ...(x.growth || [])].slice(0, 60), track: { ...tr, next: addDays(dateStr(), tr.every || TRACK_EVERY) } } : x));
+    growPhoto = '';
+    growOpen = '';
+    persist();
+    toast('📏 Medida guardada');
+    return rerender();
+  }
+  if (action === 'multiply') {
+    const p = getPlant(id);
+    if (!p) return;
+    const kind = el.dataset.kind === 'semilla' ? 'semilla' : 'esqueje';
+    const ex = seasonOf(p);
+    const ev = ex ? eventsOf(ex).find((e) => (kind === 'semilla' ? e.kind === 'semillas' || e.kind === 'sembrar' : e.kind === 'esquejes')) : null;
+    const who = `mi ${p.name}${p.sci ? ` (${p.sci})` : ''}`;
+    const known = ev?.steps?.length ? ` Lo que sé de esta especie: ${ev.steps.join(' ')}` : '';
+    pj = newPj();
+    pj.step = 'form';
+    pj.name = kind === 'semilla' ? `Semillas de ${p.name}` : `Esquejes de ${p.name}`;
+    pj.description = kind === 'semilla'
+      ? `Quiero sacar semillas de ${who} para sembrarlas. Hoy es ${fmtDay(dateStr())}.${known} Decime paso a paso desde hoy cómo y cuándo cosecharlas, cómo guardarlas, cómo sembrarlas y cuándo pasar las plantitas a su lugar; si hoy no es buena época para esta especie, avisame y adaptá el plan.`
+      : `Quiero sacar esquejes de ${who} para multiplicarla. Hoy es ${fmtDay(dateStr())}.${known} Decime paso a paso desde hoy dónde cortar, si conviene enraizar en agua o en sustrato, cada cuánto cuidarlos, cuándo pasarlos a tierra y dónde ubicarlos; si hoy no es buena época para esta especie, avisame y adaptá el plan.`;
+    return go('/proyecto/nuevo');
+  }
   if (action === 'lugares') return go('/lugares');
   if (action === 'tareas') return go('/tareas');
   if (action === 'task-move') {
@@ -2542,7 +2658,7 @@ $app.addEventListener('click', async (e) => {
     data.undoMove = { target, prev, at: Date.now() };
     persist();
     toast(`Listo: ${moved === 1 ? '1 tarea pasó' : `${moved} tareas pasaron`} al sábado ${fmtDay(target)}`);
-    if (routeName() === 'tareas') window.__keepScroll = true;
+    if (routeName() === 'tareas' || routeName() === '') window.__keepScroll = true;
     return render();
   }
   if (action === 'undo-saturday') {
@@ -2733,7 +2849,7 @@ $app.addEventListener('click', async (e) => {
     data.projects = data.projects.map(upd);
     persist();
     toast(action === 'task-done' ? 'Tarea hecha ✓' : 'Tarea borrada');
-    if (routeName() === 'tareas') window.__keepScroll = true;
+    if (routeName() === 'tareas' || routeName() === '') window.__keepScroll = true;
     return render();
   }
   if (action === 'test-gkey') {
@@ -2945,23 +3061,30 @@ $app.addEventListener('change', async (e) => {
     persist();
     toast(`Aviso a las ${pad(h)}:${pad(m)}`);
   }
-  if (t.id === 's-fert') {
-    const v = t.value.trim();
-    if (v !== (data.settings.myFertilizer || '')) {
-      data.settings = { ...data.settings, myFertilizer: v };
-      Object.values(data.species).forEach((sp) => {
-        if (sp.extra) sp.extraStale = true;
-        sp.extraTried = 0;
-      });
-      persist({ resched: false });
-      toast('Guardado. Actualizo las recomendaciones…');
-      syncAiCare();
+  if (t.id === 's-notif') {
+    data.settings = { ...data.settings, notifMode: t.value === 'separados' ? 'separados' : 'resumen' };
+    persist();
+    toast(t.value === 'separados' ? 'Un aviso por cada cosa' : 'Un solo aviso por la mañana');
+  }
+  if (t.id === 'g-every') {
+    const pl = getPlant(t.dataset.id);
+    if (pl) {
+      const v = Number(t.value);
+      const tr = pl.track || { every: TRACK_EVERY, next: dateStr(), on: true };
+      data.plants = data.plants.map((x) => (x.id === pl.id ? { ...x, track: v ? { ...tr, on: true, every: v, next: addDays(x.growth?.[0]?.date || dateStr(), v) } : { ...tr, on: false } } : x));
+      persist();
+      toast(v ? `Te pido medidas cada ${v} días` : 'No te pido más medidas de esta planta');
+      rerender();
     }
   }
-  if (t.id === 's-season') {
-    data.settings = { ...data.settings, seasonAlerts: t.checked };
-    persist();
-    toast(t.checked ? 'Avisos mensuales activados' : 'Avisos mensuales apagados');
+  if (t.id === 'g-photo-input' && t.files[0]) {
+    try {
+      growPhoto = await shrink(await fileToDataURL(t.files[0]), 640);
+      t.value = '';
+      showGrowPhoto();
+    } catch (err) {
+      toast(err.message);
+    }
   }
   if (t.id === 's-gkey') {
     data.keys.gemini = t.value.trim();
@@ -3038,6 +3161,7 @@ document.addEventListener('visibilitychange', () => {
   onNotificationTap((plantId) => {
     if (getPlant(plantId)) go(`/p/${plantId}`);
     else if (getProject(plantId)) go(`/proyecto/${plantId}`);
+    else go('/'); // el resumen de la mañana abre el inicio
   });
   const r = refreshCare(data, lookup);
   data.plants = r.plants;

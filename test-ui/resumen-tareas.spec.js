@@ -21,7 +21,11 @@ test('Ver resumen muestra las tareas de todas las plantas y proyectos, y permite
   await import('../src/main.js');
   await wait(80);
   const app = document.getElementById('app');
-  expect(app.textContent).toContain('4 tareas para hoy');
+  // el inicio muestra todo junto: atrasado y de hoy, con riegos y tareas
+  expect(app.textContent).toContain('Para hoy');
+  expect(app.textContent).toContain('Atrasado');
+  for (const txt of ['Agregar sustrato', 'Podar hojas secas', 'Limpiar bichos', 'Hacer esquejes']) expect(app.textContent).toContain(txt);
+  expect(app.textContent).not.toContain('Revisar'); // la de dentro de 3 días no
   click('[data-action="tareas"]'); await wait(60);
   expect(location.hash).toBe('#/tareas');
   for (const txt of ['Resumen de tareas', 'Palma bambú', 'Alegría del hogar', 'Albahaca', 'Agregar sustrato', 'Podar hojas secas', 'Hacer esquejes', 'Limpiar bichos', 'Esta semana', 'Revisar']) expect(app.textContent).toContain(txt);

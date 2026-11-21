@@ -2,7 +2,7 @@ import { test, expect, vi } from 'vitest';
 
 const wait = (ms = 30) => new Promise((r) => setTimeout(r, ms));
 
-test('temporada: pide la ficha a Gemini, muestra lo de este mes, calendario y recordatorio de abono', async () => {
+test('temporada: pide la ficha a Gemini; solo muestra esquejes/semillas (sin abono) y permite empezar un proyecto', async () => {
   window.scrollTo = () => {};
   const now = new Date();
   const m = now.getMonth() + 1;
@@ -36,29 +36,30 @@ test('temporada: pide la ficha a Gemini, muestra lo de este mes, calendario y re
   const app = document.getElementById('app');
 
   const gen = calls.find((c) => c.u.includes(':generateContent') && c.body.includes('ficha de temporada'));
-  expect(gen.body).toContain('humus de lombriz');
   expect(gen.body).toContain('Impatiens hawkeri');
-  expect(app.textContent).toContain('Este mes: Abonar: Impatiens');
+  // ya no hay avisos ni tarjeta de abono/poda/temporada mensual
+  expect(app.textContent).not.toContain('Este mes:');
+  expect(app.textContent).not.toContain('Abonar');
 
   location.hash = '#/p/a'; await wait();
-  expect(app.textContent).toContain('Cuidados de temporada');
-  expect(app.textContent).toContain('Una cucharada de humus por maceta');
+  expect(app.textContent).toContain('Multiplicar esta planta');
   expect(app.textContent).toContain('Hacer esquejes');
   expect(app.textContent).toContain('Cosechar semillas');
-  expect(app.textContent).toContain('Esperá a que la cápsula se seque');
-  expect(app.textContent).toContain('Pulgón');
+  expect(app.textContent).toContain('ahora es temporada');
+  expect(app.textContent).not.toContain('Cuidados de temporada');
+  expect(app.textContent).not.toContain('humus');
+  expect(document.querySelector('[data-action="abono-task"]')).toBeFalsy();
 
-  document.querySelector('[data-action="abono-task"]').click(); await wait();
-  const s = JSON.parse(localStorage.getItem('plantas.v1'));
-  const t = s.plants[0].tasks[0];
-  expect(t.title).toBe('Abonar Impatiens');
-  expect(t.every).toBe(21);
-  expect(t.months).toEqual([m]);
-  expect(t.source).toBe('abono');
+  // proyecto de esquejes a pedido, prellenado desde la planta
+  document.querySelector('[data-action="multiply"][data-kind="esqueje"]').click(); await wait();
+  expect(location.hash).toBe('#/proyecto/nuevo');
+  expect(document.getElementById('pj-name').value).toBe('Esquejes de Impatiens');
+  expect(document.getElementById('pj-desc').value).toContain('esquejes de mi Impatiens (Impatiens hawkeri)');
+  expect(document.getElementById('pj-desc').value).toContain('Cortá un tallo de 10 cm');
 
   location.hash = '#/calendario'; await wait();
-  expect(app.textContent).toContain('este mes');
-  expect(app.querySelector('.ev a').textContent).toBe('Impatiens');
+  expect(app.textContent).toContain('Hacer esquejes');
+  expect(app.textContent).not.toContain('Abonar');
 
   // no vuelve a preguntar la ficha
   const n = calls.filter((c) => c.u.includes(':generateContent')).length;

@@ -56,7 +56,8 @@ export async function reschedule(plants, settings, extras = []) {
     }
     if (perm.display !== 'granted') return { count: 0, denied: true };
 
-    const items = [...buildSchedule(plants, settings), ...extras];
+    // por defecto un solo resumen por la mañana (viene en `extras`); en modo "separados" un aviso por planta
+    const items = [...(settings.notifMode === 'separados' ? buildSchedule(plants, settings) : []), ...extras];
     if (!items.length) return { count: 0 };
     await LocalNotifications.schedule({
       notifications: items.map((i) => ({
@@ -78,8 +79,7 @@ export async function reschedule(plants, settings, extras = []) {
 export function onNotificationTap(handler) {
   if (!isNative()) return;
   LocalNotifications.addListener('localNotificationActionPerformed', (ev) => {
-    const id = ev.notification?.extra?.plantId;
-    if (id) handler(id);
+    handler(ev.notification?.extra?.plantId || '');
   });
 }
 
