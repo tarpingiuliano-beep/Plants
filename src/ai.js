@@ -138,6 +138,14 @@ async function errMsg(res) {
   }
 }
 
+/** Mensaje claro cuando falla la conexión (por ejemplo, el celu no encuentra la dirección de Google). */
+export function netHint(e) {
+  const m = String(e?.message || e);
+  return /resolve host|UnknownHost|No address associated|ENOTFOUND|Failed to fetch|network/i.test(m)
+    ? 'Tu celu no tiene internet o no encuentra a Google ahora. Revisá el Wi-Fi o los datos (probá abrir google.com en Chrome) y volvé a intentar, o seguí a mano.'
+    : 'No pude conectarme con Google.';
+}
+
 /** Prueba la clave y elige el modelo. { ok, model, status, msg } */
 export async function testGeminiKey(key) {
   try {
@@ -146,7 +154,7 @@ export async function testGeminiKey(key) {
     const model = pickModel((await res.json()).models);
     return model ? { ok: true, model } : { ok: false, status: 200, msg: 'No encontré un modelo disponible con esta clave.' };
   } catch (e) {
-    return { ok: false, status: 0, msg: `No pude conectarme con Google. [${String(e?.message || e).slice(0, 90)}]` };
+    return { ok: false, status: 0, msg: `${netHint(e)} [${String(e?.message || e).slice(0, 90)}]` };
   }
 }
 
@@ -166,8 +174,8 @@ export async function askCare(ctx, key, model) {
     const text = j.candidates?.[0]?.content?.parts?.map((p) => p.text || '').join('') || '';
     const care = parseCare(text, ctx.sci, ctx.commonName ? [ctx.commonName] : []);
     return care ? { care } : { error: 'No pude leer la respuesta de Gemini.' };
-  } catch {
-    return { error: 'No pude conectarme con Google.' };
+  } catch (e) {
+    return { error: netHint(e) };
   }
 }
 
@@ -258,8 +266,8 @@ export async function askExtra(ctx, key, model) {
     const t = j.candidates?.[0]?.content?.parts?.map((p) => p.text || '').join('') || '';
     const extra = parseExtra(t);
     return extra ? { extra } : { error: 'No pude leer la ficha de temporada.' };
-  } catch {
-    return { error: 'No pude conectarme con Google.' };
+  } catch (e) {
+    return { error: netHint(e) };
   }
 }
 
@@ -280,7 +288,7 @@ export async function askJson(prompt, key, model, images = []) {
     return { text: j.candidates?.[0]?.content?.parts?.map((p) => p.text || '').join('') || '' };
   } catch (e) {
     const m = String(e?.message || e).slice(0, 90);
-    return { error: /no respondi/i.test(m) ? `Gemini está tardando demasiado (lento o saturado). Probá de nuevo en unos minutos o seguí a mano. [${m}]` : `No pude conectarme con Google. [${m}]` };
+    return { error: /no respondi/i.test(m) ? `Gemini está tardando demasiado (lento o saturado). Probá de nuevo en unos minutos o seguí a mano. [${m}]` : `${netHint(e)} [${m}]` };
   }
 }
 

@@ -286,6 +286,21 @@ async function syncOnline() {
   await syncAiCare();
 }
 
+/** Si la tabla ahora conoce una especie que se guardó con datos de la familia, usa los datos propios de la especie. */
+function upgradeSpeciesFromTable() {
+  let changed = false;
+  for (const [sci, sp] of Object.entries(data.species || {})) {
+    if (!sp?.care || !['familia', 'género', 'genérico'].includes(sp.care.source)) continue;
+    const pl = data.plants.find((x) => x.sci === sci);
+    const fresh = lookup(sci, pl?.genus || '', pl?.family || '');
+    if (fresh.source === 'especie') {
+      data.species[sci] = { ...sp, names: sp.names?.length ? sp.names : fresh.names, care: fresh };
+      changed = true;
+    }
+  }
+  return changed;
+}
+
 function rememberSpecies(sci, genus, family) {
   if (!sci || data.species[sci]) return;
   const care = lookup(sci, genus, family);
@@ -3133,6 +3148,7 @@ document.addEventListener('visibilitychange', () => {
 
 (async function init() {
   data = await loadAsync();
+  if (upgradeSpeciesFromTable()) persist({ resched: false });
   // Rescate único: pasaron todo al sábado sin querer (14/11/2026) antes de existir "Deshacer"
   if (!data.undoMove && !data.undoLegacy && dateStr() === '2026-11-14') {
     const target = '2026-11-21';

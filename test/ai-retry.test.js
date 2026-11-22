@@ -37,3 +37,9 @@ test('si nadie responde, devuelve error en vez de colgarse', async () => {
   const f = () => new Promise(() => {});
   await assert.rejects(gemPost('m', 'k', '{}', { waits: [10], f, attemptMs: 30, budgetMs: 200 }), /no respondi/);
 });
+
+test('netHint explica la falta de internet', async () => {
+  const { netHint } = await import('../src/ai.js');
+  assert.match(netHint(new Error('Unable to resolve host "generativelanguage.googleapis.com": No address associated with hos')), /no tiene internet/);
+  assert.equal(netHint(new Error('otra cosa')), 'No pude conectarme con Google.');
+});
