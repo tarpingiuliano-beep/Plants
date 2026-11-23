@@ -1553,6 +1553,7 @@ function viewPjNew() {
     return `${head}<p class="sub">¿Qué querés hacer?</p>
       ${TEMPLATES.map((t) => `<div class="card plant-card" data-action="pj-pick" data-id="${t.id}"><div class="thumb">${t.icon}</div><div class="info"><div class="name">${esc(t.name)}</div><div class="sub">${esc(t.desc)}</div></div></div>`).join('')}
       <div class="card plant-card" data-action="pj-pick" data-id="rescate"><div class="thumb">🩺</div><div class="info"><div class="name">Rescatar una planta</div><div class="sub">Le sacás fotos y la IA identifica el problema y arma un plan de recuperación.</div></div></div>
+      <div class="card plant-card" data-action="pj-paste-start"><div class="thumb">📋</div><div class="info"><div class="name">Ya tengo el plan de Gemini</div><div class="sub">Pegás el texto que te dio (el bloque con las etapas), le sumás fotos y se crean los avisos. Sin internet.</div></div></div>
       <div class="card plant-card" data-action="pj-pick" data-id="custom"><div class="thumb">✨</div><div class="info"><div class="name">Otro proyecto, a medida</div><div class="sub">Me contás qué querés hacer y armo el plan con Gemini.</div></div></div>`;
   }
   if (pj.step === 'form') {
@@ -1575,6 +1576,22 @@ function viewPjNew() {
       ${pj.failed && !pj.busy ? '<button class="btn secondary block" style="margin-top: 10px" data-action="pj-manual">📋 Seguir a mano: copiar el pedido y pegar la respuesta de Gemini</button>' : ''}
       <button class="btn block" style="margin-top: 12px" data-action="pj-plan" ${pj.busy ? 'disabled' : ''}>${pj.busy ? 'Armando el plan… (hasta 2 min)' : t ? 'Ver el plan' : hasGemini() ? (pj.updateId ? 'Armar el plan nuevo con Gemini' : 'Armar el plan con Gemini') : 'Armar el pedido'}</button>
     </div>`;
+  }
+  if (pj.step === 'paste') {
+    return `${head}<div class="card" style="padding: 16px">
+      <label for="pj-name" style="margin-top: 0">Nombre</label>
+      <input id="pj-name" maxlength="60" value="${esc(pj.name)}" placeholder="Ej: Esquejes de santa rita" />
+      <label for="pj-start">Fecha de inicio</label>
+      <input id="pj-start" type="date" value="${esc(pj.startDate)}" />
+      <p class="hint">El día 0 del plan. Si ya empezaste, poné la fecha real: se saltea lo que ya pasó.</p>
+      <label for="pj-raw">Texto del plan</label>
+      <textarea id="pj-raw" rows="8" placeholder="Pegá acá la respuesta de Gemini (el bloque con { ... })">${esc(pj.raw)}</textarea>
+      <div class="thumbs" style="margin-top: 10px">${pj.photos.map((x, i) => `<span class="thumb"><img src="${x}" alt="" /><button type="button" class="x" data-action="pj-ph-rm" data-i="${i}" aria-label="Quitar foto">✕</button></span>`).join('')}</div>
+      ${pj.photos.length < 3 ? `<button class="btn secondary block" style="margin-top: 10px" data-action="pj-ph-add">📷 Agregar foto del estado inicial (${pj.photos.length}/3)</button>` : ''}
+      <input type="file" id="pj-photos-input" accept="image/*" hidden />
+      <p class="hint">Las fotos quedan en el diario del proyecto como "Estado inicial". Después podés sumar más desde cada tarea o desde el diario.</p>
+      ${pj.msg ? `<p class="status warn" style="margin-top: 10px">${esc(pj.msg)}</p>` : ''}
+      <button class="btn block" style="margin-top: 12px" data-action="pj-read">Leer el plan</button></div>`;
   }
   if (pj.step === 'ask') {
     return `${head}<div class="card" style="padding: 16px">
@@ -2320,7 +2337,7 @@ $app.addEventListener('click', async (e) => {
   if (action === 'pj-back') {
     if (pj && pj.step !== 'pick') {
       syncPj();
-      pj.step = pj.step === 'review' ? 'form' : pj.step === 'ask' ? 'form' : 'pick';
+      pj.step = pj.step === 'review' ? (pj.fromPaste ? 'paste' : 'form') : pj.step === 'ask' ? 'form' : 'pick';
       pj.msg = '';
       return render();
     }
@@ -2382,6 +2399,11 @@ $app.addEventListener('click', async (e) => {
     pj.step = 'form';
     return render();
   }
+  if (action === 'pj-paste-start') {
+    pj.fromPaste = true;
+    pj.step = 'paste';
+    return render();
+  }
   if (action === 'pj-manual') {
     syncPj();
     pj.msg = '';
@@ -2392,7 +2414,7 @@ $app.addEventListener('click', async (e) => {
   if (action === 'pj-plan') return pjMakePlan();
   if (action === 'pj-edit') {
     syncPj();
-    pj.step = 'form';
+    pj.step = pj.fromPaste ? 'paste' : 'form';
     pj.msg = '';
     return render();
   }
@@ -2402,6 +2424,10 @@ $app.addEventListener('click', async (e) => {
   }
   if (action === 'pj-read') {
     syncPj();
+    if (pj.step === 'paste') {
+      if (!pj.name.trim()) return ((pj.msg = 'Ponele un nombre al proyecto.'), render());
+      if (!pj.startDate) return ((pj.msg = 'Elegí la fecha de inicio.'), render());
+    }
     const r = parsePlan(pj.raw);
     if (!r.ok) {
       pj.msg = r.error;
