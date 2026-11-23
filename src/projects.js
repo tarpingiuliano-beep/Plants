@@ -110,28 +110,43 @@ const text = (v, n) => (typeof v === 'string' ? v.trim().slice(0, n) : '');
 const lines = (v, n, len = 220) => (Array.isArray(v) ? v : []).map((x) => text(String(x), len)).filter(Boolean).slice(0, n);
 
 /** Valida el plan que devolvió la IA. { ok, plan } o { ok:false, error } */
-export function parsePlan(raw) {
+export function parsePlan(raw, startDate = null) {
   if (!String(raw || '').trim()) return { ok: false, error: 'Pegá primero la respuesta de Gemini.' };
   const j = extractJson(raw);
   if (!j || typeof j !== 'object') return { ok: false, error: looksLikeQuestions(raw) ? QUESTIONS_MSG : 'No pude leer el plan. Pedile a Gemini que responda solo con el bloque JSON y pegalo de nuevo.' };
-  const etapas = (Array.isArray(j.etapas) ? j.etapas : [])
+  // Gemini a veces inventa otro formato (steps / scheduled_date / instructions…): se acepta también.
+  const list = [j.etapas, j.steps, j.pasos, j.stages].find(Array.isArray) || [];
+  const isDate = (v) => typeof v === 'string' && /^\d{4}-\d{2}-\d{2}/.test(v);
+  const dateOf = (e) => [e?.scheduled_date, e?.fecha, e?.date, e?.start_date].find(isDate)?.slice(0, 10) || null;
+  const dates = list.map(dateOf).filter(Boolean).sort();
+  const base = [j.start_date, j.fecha_inicio, dates[0], startDate].find(isDate)?.slice(0, 10) || null;
+  const pick = (...v) => v.find((x) => x !== undefined && x !== null && x !== '');
+  const etapas = list
     .map((e) => {
-      const dia = Math.round(Number(e?.dia));
-      const cada = Number(e?.cada_dias) >= 1 ? Math.min(365, Math.round(Number(e.cada_dias))) : null;
+      const d = dateOf(e);
+      const rawDia = pick(e?.dia, e?.day, e?.day_number);
+      const dia = Math.round(rawDia !== undefined ? Number(rawDia) : d && base ? daysBetween(base, d) : NaN);
+      const cadaRaw = pick(e?.cada_dias, e?.every_days, e?.interval_days);
+      const cada = Number(cadaRaw) >= 1 ? Math.min(365, Math.round(Number(cadaRaw))) : null;
       const veces = cada && Number(e?.veces) >= 1 ? Math.min(200, Math.round(Number(e.veces))) : null;
-      return { dia: Number.isFinite(dia) ? Math.max(0, Math.min(3650, dia)) : null, titulo: text(e?.titulo, 80), detalle: text(e?.detalle, 700), cada, veces };
+      const det = pick(e?.detalle, e?.detail, e?.description, e?.instructions, e?.instrucciones);
+      const detalle = Array.isArray(det) ? det.map((x) => String(x).trim()).filter(Boolean).join(' ') : det;
+      return { dia: Number.isFinite(dia) ? Math.max(0, Math.min(3650, dia)) : null, titulo: text(pick(e?.titulo, e?.title, e?.name, e?.nombre), 80), detalle: text(detalle, 700), cada, veces };
     })
     .filter((e) => e.dia !== null && e.titulo)
     .sort((a, b) => a.dia - b.dia)
     .slice(0, MAX_STAGES);
   if (!etapas.length) return { ok: false, error: 'El plan no trae etapas con fechas. Probá pedírselo de nuevo a Gemini.' };
+  const rc = j.recurring_care;
+  const extra = [];
+  if (rc && Number(rc.watering_interval_days) >= 1) extra.push(`Riego de mantenimiento: cada ${Math.round(Number(rc.watering_interval_days))} días${/dry|seco/i.test(String(rc.watering_condition || '')) ? ', solo cuando el sustrato esté completamente seco' : ''}.`);
   return {
     ok: true,
     plan: {
-      resumen: text(j.resumen, 400),
+      resumen: text(pick(j.resumen, j.summary, j.description), 400),
       diagnostico: text(j.diagnostico, 400),
       materiales: lines(j.materiales, 10, 100),
-      consejos: lines(j.consejos, 6),
+      consejos: [...lines(j.consejos, 6), ...extra].slice(0, 6),
       alertas: lines(j.alertas, 5),
       etapas,
       source: 'Gemini',

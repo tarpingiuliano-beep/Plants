@@ -2428,7 +2428,7 @@ $app.addEventListener('click', async (e) => {
       if (!pj.name.trim()) return ((pj.msg = 'Ponele un nombre al proyecto.'), render());
       if (!pj.startDate) return ((pj.msg = 'Elegí la fecha de inicio.'), render());
     }
-    const r = parsePlan(pj.raw);
+    const r = parsePlan(pj.raw, pj.startDate);
     if (!r.ok) {
       pj.msg = r.error;
       return render();

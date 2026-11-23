@@ -56,3 +56,20 @@ test('prompt, proyecto y diario', () => {
   assert.equal(addLog(pr, { text: 'hola' }).log.length, 1);
   assert.equal(TEMPLATES.length, 2);
 });
+
+test('parsePlan acepta el formato alternativo de Gemini (steps / scheduled_date / instructions)', async () => {
+  const { parsePlan } = await import('../src/projects.js');
+  const raw = JSON.stringify({
+    start_date: '2026-11-23', recurring_care: { watering_interval_days: 12, watering_condition: 'only_when_completely_dry' },
+    steps: [
+      { step_number: 1, title: 'Cicatrizar', scheduled_date: '2026-11-23', instructions: ['Dejar secar.', 'Sombra.'] },
+      { step_number: 3, title: 'Primer riego', scheduled_date: '2026-12-05', instructions: ['Riego suave.'] },
+      { step_number: 4, title: 'Verificar', scheduled_date: '2026-12-23', instructions: ['Tocar.'] },
+    ],
+  });
+  const r = parsePlan(raw, '2026-11-25');
+  assert.ok(r.ok);
+  assert.deepEqual(r.plan.etapas.map((e) => e.dia), [0, 12, 30]);
+  assert.equal(r.plan.etapas[0].detalle, 'Dejar secar. Sombra.');
+  assert.match(r.plan.consejos.at(-1), /cada 12 días.*seco/);
+});
