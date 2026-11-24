@@ -17,7 +17,7 @@ import { waterRenewDays, WATER_TIPS, waterFit, cleaningTask, buildWaterPrompt, p
 import { DEFAULT_ZONES, LIGHT_OPTIONS, zoneOf, assess, placementFor, cleanZones, LEVEL_ICON } from './casa.js';
 import { shareTextFile, copyText, sharePhotosWithText } from './files.js';
 import {
-  MAX_PHOTOS, makeTask, buildPrompt, buildConvertPrompt, parseAnswer, tasksFromActions, completeTask, removeTask, nextSaturday, postponeTasks, taskState, taskText, dueTasks, buildTaskSchedule,
+  MAX_PHOTOS, makeTask, buildPrompt, buildConvertPrompt, parseAnswer, tasksFromActions, completeTask, removeTask, shiftFollowing, nextSaturday, postponeTasks, taskState, taskText, dueTasks, buildTaskSchedule,
 } from './novedad.js';
 import {
   dateStr,
@@ -2879,17 +2879,29 @@ $app.addEventListener('click', async (e) => {
   }
   if (action === 'task-done' || action === 'task-del') {
     const { tid } = el.dataset;
+    // en un proyecto, hacer una tarea con atraso corre las que siguen (con confirmación) para mantener los tiempos entre pasos
+    let shifted = 0;
+    if (action === 'task-done') {
+      const pj0 = getProject(id);
+      const t0 = pj0?.tasks?.find((k) => k.id === tid);
+      if (t0 && !t0.guide) {
+        const r = shiftFollowing(pj0.tasks, tid);
+        const dd = `${r.days} ${r.days === 1 ? 'día' : 'días'}`;
+        if (r.days && r.moved && confirm(`Hiciste esta tarea ${dd} tarde.\n\n¿Corro ${r.moved === 1 ? 'la tarea que sigue' : `las ${r.moved} tareas que siguen`} del proyecto ${dd}, para mantener el tiempo entre los pasos?`)) shifted = r.days;
+      }
+    }
     const upd = (x) => {
       if (x.id !== id) return x;
       const task = (x.tasks || []).find((k) => k.id === tid);
       if (action === 'task-done' && task?.guide) return advanceGuide(x, tid, `${pad(data.settings.hour)}:${pad(data.settings.minute)}`);
-      const next = { ...x, tasks: action === 'task-done' ? completeTask(x.tasks || [], tid) : removeTask(x.tasks || [], tid) };
+      const base = shifted ? shiftFollowing(x.tasks || [], tid).tasks : x.tasks || [];
+      const next = { ...x, tasks: action === 'task-done' ? completeTask(base, tid) : removeTask(x.tasks || [], tid) };
       return getProject(id) && action === 'task-done' && task ? addLog(next, { type: 'tarea', text: `✓ ${task.title}` }) : next;
     };
     data.plants = data.plants.map(upd);
     data.projects = data.projects.map(upd);
     persist();
-    toast(action === 'task-done' ? 'Tarea hecha ✓' : 'Tarea borrada');
+    toast(action === 'task-done' ? (shifted ? `Tarea hecha ✓ · el resto del plan se corrió ${shifted} ${shifted === 1 ? 'día' : 'días'}` : 'Tarea hecha ✓') : 'Tarea borrada');
     if (routeName() === 'tareas' || routeName() === '') window.__keepScroll = true;
     return render();
   }

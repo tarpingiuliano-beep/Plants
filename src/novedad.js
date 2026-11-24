@@ -181,6 +181,23 @@ export function completeTask(tasks, id, today = dateStr()) {
   return out;
 }
 
+/**
+ * Si una tarea se hizo con atraso, las que vienen después en el plan se corren esa misma cantidad de días.
+ * Devuelve { tasks, days, moved }; sin atraso o sin tareas posteriores no cambia nada.
+ */
+export function shiftFollowing(tasks, doneId, today = dateStr()) {
+  const t = (tasks || []).find((k) => k.id === doneId);
+  const days = t ? Math.max(0, daysBetween(t.due, today)) : 0;
+  if (!days) return { tasks, days: 0, moved: 0 };
+  let moved = 0;
+  const out = tasks.map((k) => {
+    if (k.id === doneId || !(k.due > t.due)) return k;
+    moved++;
+    return { ...k, due: addDays(k.due, days) };
+  });
+  return { tasks: out, days, moved };
+}
+
 export const removeTask = (tasks, id) => tasks.filter((t) => t.id !== id);
 
 /** Próximo sábado desde `today` (si hoy es sábado, el que viene). */

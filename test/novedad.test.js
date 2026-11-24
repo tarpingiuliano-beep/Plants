@@ -103,3 +103,16 @@ test('postponeTasks mueve solo lo que vence antes del sábado', () => {
   assert.deepEqual(r.tasks.map((t) => t.due), ['2026-11-14', '2026-11-14', '2026-11-14', '2026-11-20']);
   assert.equal(r.moved, 2);
 });
+
+test('shiftFollowing: hecha con atraso corre solo las que siguen', async () => {
+  const { shiftFollowing } = await import('../src/novedad.js');
+  const T = (id, due) => ({ id, title: id, due, time: '09:00' });
+  const tasks = [T('a', '2026-11-20'), T('b', '2026-11-23'), T('c', '2026-12-05'), T('antes', '2026-11-10')];
+  const r = shiftFollowing(tasks, 'a', '2026-11-23');
+  assert.equal(r.days, 3);
+  assert.equal(r.moved, 2);
+  assert.deepEqual(r.tasks.map((t) => t.due), ['2026-11-20', '2026-11-26', '2026-12-08', '2026-11-10']);
+  // a tiempo (o adelantada): no cambia nada
+  assert.equal(shiftFollowing(tasks, 'c', '2026-11-23').days, 0);
+  assert.equal(shiftFollowing(tasks, 'c', '2026-11-23').tasks, tasks);
+});
